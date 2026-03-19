@@ -1,0 +1,18 @@
+neural-mpcx
+Copyright 2026 Helmholtz-Zentrum Dresden-Rossendorf e.V. (HZDR)
+Authors: 
+  - Ênio Lopes Júnior
+  - Sebastian Felix Reinecke
+
+---
+
+THIRD-PARTY NOTICES
+
+Portions of this software are derived from casadi-nlp, originally
+distributed under the MIT License:
+
+  Copyright (c) 2024 Filippo Airaldi
+  https://github.com/FilippoAiraldi/casadi-nlp
+
+The full text of the MIT License is available in LICENSE-MIT in
+this repository.

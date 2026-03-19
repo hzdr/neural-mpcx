@@ -1,0 +1,139 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "neuralmpcx"
+version = "0.1.0"
+description = "Model Predictive Control toolkit with neural MPC support (CasADi-friendly)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [
+  { name = "Ênio Lopes Júnior", email = "e.lopes-junior@hzdr.de" },
+  { name = "Sebastian Felix Reinecke", email = "s.reinecke@hzdr.de" },
+]
+keywords = ["mpc", "control", "optimization", "casadi", "neural networks"]
+classifiers = [
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+  "Topic :: Scientific/Engineering",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+  "numpy >= 1.26.4, < 2.0.0 ; python_version <= '3.9'",
+  "casadi >= 3.6.6",
+  "joblib >= 1.4.2",
+  "gymnasium>=0.29.1",
+  "scipy >= 1.10.0",
+  "tqdm >= 4.60.0",
+  "matplotlib >= 3.5.0",
+  "pandas >= 1.5.0",
+  "typing_extensions ; python_version <= '3.10'"
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-cov", "ruff", "mypy", "pre-commit", "build", "twine"]
+docs = ["mkdocs-material", "mkdocstrings[python]"]
+torch = [
+  "torch>=2.0.0",
+  "torchvision>=0.15.1",
+  "torchaudio>=2.0.1"
+]
+
+[project.urls]
+Homepage = "https://github.com/hzdr/neural-mpcx"
+Documentation = "https://github.com/hzdr/neural-mpcx#readme"
+Source = "https://github.com/hzdr/neural-mpcx"
+Issues = "https://github.com/hzdr/neural-mpcx/issues"
+
+[tool.ruff]
+target-version = "py39"
+line-length = 88
+
+exclude = [
+    ".git",
+    ".ruff_cache",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "*.egg-info",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+    "RET", # flake8-return
+]
+
+ignore = [
+    "E501",   # Line too long (handled by black)
+    "B008",   # Do not perform function calls in argument defaults
+    "C901",   # Too complex (can be revisited)
+    "E741",   # Ambiguous variable names (sometimes needed in math)
+    "I001",   # Import block unsorted (conflicts with black formatting)
+    "N806",   # Variable in function should be lowercase (math/control variables like X, U, Y, F, etc.)
+    "N803",   # Argument name should be lowercase (math/control variables)
+    "N802",   # Function name should be lowercase (_setup_Neural_MPC is intentional)
+    "N812",   # Lowercase imported as non-lowercase (P for polynomial is conventional)
+    "C416",   # Unnecessary list comprehension (used for clarity)
+    "SIM108", # Ternary operator (readability preference)
+    "E731",   # Lambda expressions (used for brevity in specific contexts)
+    "UP006",  # Tuple type annotations (backwards compatibility)
+    "UP008",  # super() modernization (backwards compatibility)
+    "UP035",  # Import modernization (backwards compatibility)
+    "UP031",  # Old-style string formatting (backwards compatibility)
+    "B004",   # hasattr callable check (checking specific methods)
+    "B007",   # Unused loop variables (intentional in some contexts)
+    "B019",   # lru_cache on methods (intentional caching pattern)
+    "B028",   # No stacklevel in warnings (not critical)
+    "SIM118", # Use key in dict (explicit .keys() is clear)
+    "RET504", # Unnecessary assignment before return (code clarity)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/**/*.py" = ["S101"]
+"examples/**/*.py" = ["E402", "N815", "N816", "F601", "SIM113"]  # Relaxed rules for example/demo code
+"examples/**/*.ipynb" = ["E402", "N815", "N816", "F601", "SIM113"]  # Relaxed rules for notebooks
+
+[tool.ruff.lint.isort]
+known-first-party = ["neuralmpcx"]
+force-single-line = false
+lines-after-imports = 2
+
+[tool.black]
+line-length = 88
+target-version = ["py39", "py310", "py311", "py312"]
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true

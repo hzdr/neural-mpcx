@@ -1,0 +1,59 @@
+{
+  "@context": "https://doi.org/10.5063/schema/codemeta-2.0",
+  "@type": "SoftwareSourceCode",
+  "name": "NeuralMPCX",
+  "description": "Model Predictive Control toolkit with neural MPC support (CasADi-friendly).",
+  "version": "0.1.0",
+  "license": "https://spdx.org/licenses/Apache-2.0",
+  "codeRepository": "https://github.com/hzdr/neural-mpcx",
+  "issueTracker": "https://github.com/hzdr/neural-mpcx/issues",
+  "programmingLanguage": "Python",
+  "operatingSystem": ["Linux", "Windows", "macOS"],
+  "runtimePlatform": "Python >= 3.9",
+  "dateCreated": "2026-03-13",
+  "datePublished": "2026-03-13",
+  "author": [
+    {
+      "@type": "Person",
+      "@id": "https://orcid.org/0000-0002-7604-3205",
+      "givenName": "Ênio",
+      "familyName": "Lopes Júnior",
+      "email": "e.lopes-junior@hzdr.de",
+      "affiliation": {
+        "@type": "Organization",
+        "name": "Helmholtz-Zentrum Dresden-Rossendorf (HZDR)"
+      }
+    },
+    {
+      "@type": "Person",
+      "@id": "https://orcid.org/0000-0003-2705-0692",
+      "givenName": "Sebastian Felix",
+      "familyName": "Reinecke",
+      "email": "s.reinecke@hzdr.de",
+      "affiliation": {
+        "@type": "Organization",
+        "name": "Helmholtz-Zentrum Dresden-Rossendorf (HZDR)"
+      }
+    }
+  ],
+  "copyrightHolder": {
+    "@type": "Organization",
+    "name": "Helmholtz-Zentrum Dresden-Rossendorf e.V. (HZDR)"
+  },
+  "keywords": [
+    "model predictive control",
+    "neural networks",
+    "LSTM",
+    "CasADi",
+    "optimization",
+    "control engineering",
+    "recurrent neural networks"
+  ],
+  "softwareRequirements": [
+    "numpy >= 1.26.4",
+    "casadi >= 3.6.6",
+    "joblib >= 1.4.2",
+    "gymnasium >= 0.29.1",
+    "scipy >= 1.10.0"
+  ]
+}

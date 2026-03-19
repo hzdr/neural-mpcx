@@ -1,0 +1,44 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "NeuralMPCX: Classic and Neural Model Predictive Control"
+version: "0.1.0"
+license: Apache-2.0
+repository-code: "https://github.com/hzdr/neural-mpcx"
+url: "https://github.com/hzdr/neural-mpcx"
+date-released: 2026-03-13
+authors:
+  - family-names: "Lopes Júnior"
+    given-names: "Ênio"
+    affiliation: "Helmholtz-Zentrum Dresden-Rossendorf (HZDR)"
+    email: "e.lopes-junior@hzdr.de"
+    orcid: "https://orcid.org/0000-0002-7604-3205"
+  - family-names: "Reinecke"
+    given-names: "Sebastian Felix"
+    affiliation: "Helmholtz-Zentrum Dresden-Rossendorf (HZDR)"
+    email: "s.reinecke@hzdr.de"
+    orcid: "https://orcid.org/0000-0003-2705-0692"
+keywords:
+  - model predictive control
+  - neural networks
+  - LSTM
+  - CasADi
+  - optimization
+  - control engineering
+  - neural mpc
+preferred-citation:
+  type: software
+  title: "NeuralMPCX: Classic and Neural Model Predictive Control"
+  authors:
+    - family-names: "Lopes Júnior"
+      given-names: "Ênio"
+      affiliation: "Helmholtz-Zentrum Dresden-Rossendorf (HZDR)"
+      email: "e.lopes-junior@hzdr.de"
+      orcid: "https://orcid.org/0000-0002-7604-3205"
+    - family-names: "Reinecke"
+      given-names: "Sebastian Felix"
+      affiliation: "Helmholtz-Zentrum Dresden-Rossendorf (HZDR)"
+      email: "s.reinecke@hzdr.de"
+      orcid: "https://orcid.org/0000-0003-2705-0692"
+  year: 2026
+  url: "https://github.com/hzdr/neural-mpcx"
+  license: Apache-2.0
