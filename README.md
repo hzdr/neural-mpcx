@@ -5,6 +5,7 @@
 [![Python](https://img.shields.io/badge/python-%3E%3D3.9-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE.txt)
 [![CI](https://github.com/hzdr/neural-mpcx/actions/workflows/ci.yml/badge.svg)](https://github.com/hzdr/neural-mpcx/actions)
+[![DOI](https://rodare.hzdr.de/badge/1180898465.svg)](https://rodare.hzdr.de/badge/latestdoi/1180898465)
 
 ---
 

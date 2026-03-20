@@ -5,6 +5,7 @@
   "description": "Model Predictive Control toolkit with neural MPC support (CasADi-friendly).",
   "version": "1.0.0",
   "license": "https://spdx.org/licenses/Apache-2.0",
+  "identifier": "https://doi.org/10.14278/rodare.4568",
   "codeRepository": "https://github.com/hzdr/neural-mpcx",
   "issueTracker": "https://github.com/hzdr/neural-mpcx/issues",
   "programmingLanguage": "Python",
