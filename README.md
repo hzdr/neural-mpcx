@@ -339,7 +339,7 @@ pre-commit install
 For academic work, cite:
 
 ```
-@software{neuralmpcx2026,  title        = {NeuralMPCX: Classic and Neural Model Predictive Control},  author       = {Lopes Júnior, Ênio and Reinecke, Sebastian Felix},  year         = {2026},  url          = {https://github.com/hzdr/neural-mpcx}}
+@software{neuralmpcx2026,  title        = {NeuralMPCX: A Model Predictive Control library that supports classic MPC and neural MPC with CasADi},  author       = {Lopes Júnior, Ênio and Reinecke, Sebastian Felix},  year         = {2026},  url          = {https://github.com/hzdr/neural-mpcx}}
 ```
 
 ---

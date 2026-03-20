@@ -1,0 +1,20 @@
+{
+    "creators": [
+        {
+            "name": "Lopes-Júnior, Ênio",
+            "affiliation": "Helmholtz-Zentrum Dresden-Rossendorf (HZDR)",
+            "orcid": "0000-0002-7604-3205"
+        },
+        {
+            "name": "Reinecke, Sebastian Felix",
+            "affiliation": "Helmholtz-Zentrum Dresden-Rossendorf (HZDR)",
+            "orcid": "0000-0003-2705-0692"
+        }
+    ],
+    "title": "NeuralMPCX: A Model Predictive Control library that supports classic MPC and neural MPC with CasADi",
+    "access_right": "open",
+    "upload_type": "software",
+    "license": "Apache-2.0",
+    "pub_id": "43156",
+    "description": "NeuralMPCX is a Python library for building and deploying Model Predictive Controllers with classic and neural dynamical models. You write constrained MPC with RNN/LSTM models in a CasADi/IPOPT workflow. The library handles CasADi RNN integration, warm-starting, constraint management, real-time feasibility, and both LTI state-space and neural dynamics in one framework. You can run neural and classical MPC controllers side by side."
+}
