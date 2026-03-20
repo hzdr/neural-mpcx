@@ -150,6 +150,8 @@ env/
 *-venv/
 *-venv-*/
 *_venv/
+.*env
+.vscode
 
 # Spyder project settings
 .spyderproject

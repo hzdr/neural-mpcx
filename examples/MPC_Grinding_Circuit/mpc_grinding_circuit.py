@@ -206,7 +206,7 @@ class LinearMpc(Mpc[cs.MX]):
         "w": np.asarray(0, dtype=np.float64),
     }
 
-    def __init__(self, A_d, B_d, C_d, D_d):
+    def __init__(self, A_d, B_d, C_d, D_d, Ts_mul=0.5):
         N     = self.pred_horizon
         M     = self.contr_horizon
         gamma = self.discount_factor
@@ -302,8 +302,14 @@ class LinearMpc(Mpc[cs.MX]):
         opts = {
             "print_time": False,
             "ipopt": {
-                "linear_solver": "ma27",
-                "hsllib": os.path.expanduser("/home/coinhsl/lib/libcoinhsl.so"),
+                "linear_solver": "mumps",
+                "mumps_pivtol": 1e-3,
+                "mumps_pivtolmax": 0.5,
+                # Uncomment below to use HSL solvers (faster for large problems)
+                # "linear_solver": "ma27",  # or "ma57", "ma97"
+                # "hsllib": os.path.expanduser("/home/coinhsl/lib/libcoinhsl.so"),
+                "nlp_scaling_method": "gradient-based", # NLP scaling is necessary when mixing signals of very different magnitudes.
+                "nlp_scaling_max_gradient": 100.0,
                 "max_iter": 200,
                 "sb": "yes",
                 "print_level": 0,
