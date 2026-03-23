@@ -1,15 +1,9 @@
-# NeuralMPCX
-
-> A Model Predictive Control library that supports **classic MPC** and **neural MPC** with CasADi.
-
+![NeuralMPCX Logo](fig/NeuralMPCX_LOGO_banner.png)
 [![Python](https://img.shields.io/badge/python-%3E%3D3.9-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE.txt)
-[![CI](https://github.com/hzdr/neural-mpcx/actions/workflows/ci.yml/badge.svg)](https://github.com/hzdr/neural-mpcx/actions)
 [![DOI](https://rodare.hzdr.de/badge/1180898465.svg)](https://rodare.hzdr.de/badge/latestdoi/1180898465)
 
----
-
-## NeuralMPCX
+--------------------------------------------------------------------------------
 NeuralMPCX is a Python library for building and deploying Model Predictive Controllers with classic and neural dynamical models. You write constrained MPC with RNN/LSTM models in a CasADi/IPOPT workflow. The library handles CasADi RNN integration, warm-starting, constraint management, real-time feasibility, and both LTI state-space and neural dynamics in one framework. You can run neural and classical MPC controllers side by side.
 
 ---
