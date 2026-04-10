@@ -16,7 +16,7 @@ import numpy as np
 import numpy.typing as npt
 from numpy.polynomial import polynomial as P
 from scipy.interpolate import pade as scipy_pade
-from scipy.linalg import solve_discrete_are
+from scipy.linalg import solve_continuous_lyapunov, solve_discrete_are
 from scipy.signal import cont2discrete, tf2ss
 
 T = TypeVar("T")
@@ -375,6 +375,69 @@ def _assemble_mimo_ss(
     return A_cont, B_cont, C_cont, D_accum
 
 
+def _balanced_realization(
+    A: npt.NDArray[np.floating],
+    B: npt.NDArray[np.floating],
+    C: npt.NDArray[np.floating],
+) -> Tuple[
+    npt.NDArray[np.floating],
+    npt.NDArray[np.floating],
+    npt.NDArray[np.floating],
+]:
+    """Apply balanced realization to a continuous-time state-space (A, B, C).
+
+    Computes a similarity transformation T such that in the new coordinates
+    the controllability and observability Gramians are equal and diagonal,
+    with the Hankel singular values on the diagonal.  This gives the
+    best-conditioned numerically equivalent state-space representation.
+
+    Algorithm (Gramian method):
+
+    1. Solve controllability Gramian:  A Wc + Wc A^T + B B^T = 0
+    2. Solve observability Gramian:   A^T Wo + Wo A + C^T C = 0
+    3. Cholesky:  Wc = Lc Lc^T,  Wo = Lo Lo^T
+    4. SVD:  Lo^T Lc = U S V^T
+    5. T = Lc V S^{-1/2},  T_inv = S^{-1/2} U^T Lo^T
+    6. A_bal = T_inv A T,  B_bal = T_inv B,  C_bal = C T
+
+    Parameters
+    ----------
+    A : array (n, n)
+        Continuous-time state matrix.  Must be Hurwitz (all eigenvalues
+        strictly in the open left-half plane).
+    B : array (n, nu)
+        Input matrix.
+    C : array (ny, n)
+        Output matrix.
+
+    Returns
+    -------
+    tuple of (A_bal, B_bal, C_bal)
+        Balanced state-space matrices.
+
+    Raises
+    ------
+    numpy.linalg.LinAlgError
+        If the Gramians are not positive definite (system not
+        controllable/observable, or A not Hurwitz).
+    """
+    Wc = solve_continuous_lyapunov(A, -(B @ B.T))
+    Wo = solve_continuous_lyapunov(A.T, -(C.T @ C))
+
+    from scipy.linalg import cholesky
+
+    Lc = cholesky(Wc, lower=True)
+    Lo = cholesky(Wo, lower=True)
+
+    U, S, Vt = np.linalg.svd(Lo.T @ Lc)
+    s_sqrt_inv = np.diag(S**-0.5)
+
+    T = Lc @ Vt.T @ s_sqrt_inv
+    T_inv = s_sqrt_inv @ U.T @ Lo.T
+
+    return T_inv @ A @ T, T_inv @ B, C @ T
+
+
 def mimo_tf2ss(
     G: Dict[Tuple[int, int], List[TransferFunctionTerm]],
     ny: int,
@@ -383,6 +446,7 @@ def mimo_tf2ss(
     pade_order: int = 2,
     method: Literal["zoh", "foh", "impulse", "tustin", "bilinear"] = "zoh",
     store_continuous: bool = True,
+    balanced: bool = True,
 ) -> DiscreteStateSpace:
     """Convert a MIMO transfer function matrix to discrete state-space form.
 
@@ -405,6 +469,15 @@ def mimo_tf2ss(
         Options: 'zoh' (default), 'foh', 'impulse', 'tustin', 'bilinear'.
     store_continuous : bool, optional
         If True, also stores continuous-time matrices in result. Default True.
+    balanced : bool, optional
+        If True (default), applies a balanced realization to the assembled
+        continuous-time state-space before discretization.  The similarity
+        transformation equalises the controllability and observability
+        Gramians, giving the best-conditioned numerically equivalent
+        representation.  Requires all eigenvalues of A to be strictly in the
+        open left-half plane (Hurwitz).  A ``UserWarning`` is emitted and the
+        unbalanced (controllable canonical) form is kept when the system
+        contains integrators or other marginally stable/unstable modes.
 
     Returns
     -------
@@ -426,8 +499,34 @@ def mimo_tf2ss(
     >>> ss = mimo_tf2ss(G, ny=2, nu=2, Ts=30.0, pade_order=2)
     >>> print(f"State dimension: {ss.nx}")
     """
+    import warnings
+
     # Assemble continuous MIMO state-space
     A_cont, B_cont, C_cont, D_cont = _assemble_mimo_ss(G, ny, nu, pade_order)
+
+    # Apply balanced realization (similarity transform for best conditioning)
+    if balanced and A_cont.size > 0:
+        eigs = np.linalg.eigvals(A_cont)
+        if np.all(eigs.real < 0):
+            try:
+                A_cont, B_cont, C_cont = _balanced_realization(
+                    A_cont, B_cont, C_cont
+                )
+            except np.linalg.LinAlgError:
+                warnings.warn(
+                    "Balanced realization failed (Gramians not positive definite). "
+                    "Using controllable canonical form.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+        else:
+            warnings.warn(
+                "System has marginally stable or unstable modes (e.g., integrators). "
+                "Balanced realization requires a Hurwitz A matrix; "
+                "using controllable canonical form.",
+                UserWarning,
+                stacklevel=2,
+            )
 
     # Discretize
     if A_cont.size > 0:
