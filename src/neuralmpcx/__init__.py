@@ -2,17 +2,15 @@ r"""Neural MPCX (neuralmpcx) is a Model Predictive Control toolkit with neural M
 
 
 ==================== ========================================================
-**Documentation**        https://neuralmpcx.readthedocs.io/en/stable/
+**Documentation**        https://github.com/hzdr/neural-mpcx/blob/main/README.md
 
-**Download**             https://pypi.python.org/pypi/neuralmpcx/
+**Source code**          https://github.com/hzdr/neural-mpcx
 
-**Source code**          https://github.com/EnioLopes/neural-mpcx/
-
-**Report issues**        https://github.com/EnioLopes/neural-mpcx/issues/
+**Report issues**        https://github.com/hzdr/neural-mpcx/issues
 ==================== ========================================================
 """
 
-__version__ = "1.1.0"
+__version__ = "2.0.0"
 
 __all__ = ["Nlp", "Solution"]
 

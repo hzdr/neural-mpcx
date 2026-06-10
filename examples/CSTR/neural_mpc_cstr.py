@@ -68,11 +68,12 @@ BETA = 1
 N_CONTEXT = 10
 HIDDEN_SIZE = 16
 HORIZON = 20
-WARMUP_TYPE = "X0"  # "NONE", "ZEROS" OR "X0"
-IS_ESTIMATOR = True if WARMUP_TYPE != "NONE" else False
+N_WARMUP = 1
 NUM_ITER = 1000
 EXPERIMENT_ID = "experiment_3.4.2"
-MODEL_NAME = "cstr-lstm-batched-16"
+MODEL_NAME = f"cstr-lstm-batched-{HIDDEN_SIZE}"
+USE_MEAS_NOISE = False
+NOISE_AMP = 0.01
 
 U_NORM_PARAMS = {
     "F": {"min": 0.0, "max": 100.0},
@@ -149,6 +150,8 @@ class CSTRSystem(gym.Env):
         Number of inputs (2).
     a_bnd : tuple
         Normalized input bounds (min, max) as (2x1) arrays.
+    use_meas_noise : bool
+        Whether to add measurement noise.
 
     Notes
     -----
@@ -174,6 +177,9 @@ class CSTRSystem(gym.Env):
     )
     nx = 4
     nu = 2
+    output_noise_low = np.array([[-NOISE_AMP*20], [-NOISE_AMP*20], [-NOISE_AMP*200], [-NOISE_AMP*200]], dtype=np.float64)
+    output_noise_high = np.array([[NOISE_AMP*20], [NOISE_AMP*20], [NOISE_AMP*200], [NOISE_AMP*200]], dtype=np.float64)
+    use_meas_noise = USE_MEAS_NOISE
 
     def __init__(self, dt_hr=0.005):
         """Initialize CSTR system with physical parameters and steady state.
@@ -381,7 +387,18 @@ class CSTRSystem(gym.Env):
         self.x[2] = np.clip(self.x[2], 0, 200)
         self.x[3] = np.clip(self.x[3], 0, 200)
 
-        return self._normalize_state(self.x.copy()), 0.0, False, False, {}
+        y = self.x.copy()
+        if self.use_meas_noise:
+            noise = self.np_random.uniform(
+                self.output_noise_low, self.output_noise_high
+            ).reshape(self.nx, 1)
+            y = y + noise
+            y[0] = np.clip(y[0], 0, 20)
+            y[1] = np.clip(y[1], 0, 20)
+            y[2] = np.clip(y[2], 0, 200)
+            y[3] = np.clip(y[3], 0, 200)
+
+        return self._normalize_state(y), 0.0, False, False, {}
 
 
 class NeuralMpc(Mpc[cs.MX]):
@@ -416,7 +433,8 @@ class NeuralMpc(Mpc[cs.MX]):
     -----
     - All variables (states, inputs) are normalized to [0, 1] for numerical stability.
     - Soft constraints on state bounds are enforced via slack variables with penalty.
-    - Hard constraints are applied to specific state indices (C_A, C_B, T_K).
+    - Hard constraints are applied to specific state indices (C_B, T_K); C_A and
+      T_R are soft to stay feasible under measurement noise.
     - Cost function includes tracking error, control effort, and terminal cost.
     - Uses IPOPT solver with custom tolerance settings for real-time feasibility.
 
@@ -490,7 +508,7 @@ class NeuralMpc(Mpc[cs.MX]):
             dtype=float,
         ),
         "R": np.asarray([[1, 0], [0, 1e-4]], dtype=float),
-        "w": np.asarray([0, 0, 1e2, 0], dtype=np.float64),
+        "w": np.asarray([1e2, 0, 1e2, 0], dtype=np.float64),
         "x_scaling": np.asarray([1, 1, 1, 1], dtype=float),
         "u_scaling": np.asarray([1, 1], dtype=float),
     }
@@ -513,7 +531,7 @@ class NeuralMpc(Mpc[cs.MX]):
         -----
         - Loads pre-trained LSTM model from models/{MODEL_NAME}.pt
         - Slack variable weights prevent constraint violations
-        - Hard constraints enforced on C_A, C_B, and T_K indices
+        - Hard constraints enforced on C_B and T_K indices
         - Control effort penalized via delta_u in cost function
         """
         N = self.horizon
@@ -561,7 +579,6 @@ class NeuralMpc(Mpc[cs.MX]):
             hidden_size=HIDDEN_SIZE,
             horizon=self.horizon,
             proj_size=4,
-            is_estimator=IS_ESTIMATOR,
             input_order="y_then_u",
         )
 
@@ -577,22 +594,26 @@ class NeuralMpc(Mpc[cs.MX]):
             output_bias=b,
             name="F_neural",
             remove_bounds_on_initial_action=True,
+            n_warmup=N_WARMUP,
         )
 
         xlb_rep = cs.repmat(x_lb, 1, N)
         xub_rep = cs.repmat(x_ub, 1, N)
-        hard_indices = [0, 1, 3]
+        hard_indices = [1, 3]
         self.constraint("s1_hard", s1[hard_indices, :], "==", 0)
         self.constraint("s2_hard", s2[hard_indices, :], "==", 0)
+        # Bounds start at column n_context: columns [:n_context] are fixed to
+        # the measurements, so constraining them can make the NLP infeasible
+        # whenever a noisy measurement falls outside the bounds.
         self.constraint(
             "x_lb",
             xlb_rep * x_scaling - s1,
             "<=",
-            x[:, (self.n_context - 1) : -1] * x_scaling,
+            x[:, self.n_context :] * x_scaling,
         )
         self.constraint(
             "x_ub",
-            x[:, (self.n_context - 1) : -1] * x_scaling,
+            x[:, self.n_context :] * x_scaling,
             "<=",
             xub_rep * x_scaling + s1,
         )
@@ -720,10 +741,7 @@ if __name__ == "__main__":
     state, _ = env.reset(seed=mk_seed(rng), options=None)
 
     X, U, SP, X_pred = [state], [], [], []
-    if WARMUP_TYPE == "X0":
-        state_context = np.tile(state.T, (mpc.n_context, 1))
-    else:
-        state_context = np.zeros((mpc.n_context, CSTRSystem.nx))
+    state_context = np.tile(state.T, (mpc.n_context, 1))
     action_context = np.zeros((mpc.n_context, CSTRSystem.nu))
 
     exec_times_ms = []
@@ -759,14 +777,10 @@ if __name__ == "__main__":
                 exec_times_ms.append((t1 - t0) * 1000.0)
                 obs, _, _, _, _ = env.step(np.asarray(u_opt))
                 state = obs
-                if WARMUP_TYPE == "NONE":
-                    state_context = np.zeros((mpc.n_context, CSTRSystem.nx))
-                    action_context = np.zeros((mpc.n_context, CSTRSystem.nu))
-                else:
-                    state_context = np.vstack([state_context, obs.T])[-mpc.n_context :]
-                    action_context = np.vstack([action_context, np.asarray(u_opt).T])[
-                        -mpc.n_context :
-                    ]
+                state_context = np.vstack([state_context, obs.T])[-mpc.n_context :]
+                action_context = np.vstack([action_context, np.asarray(u_opt).T])[
+                    -mpc.n_context :
+                ]
 
                 if mpc._last_solution is not None:
                     X_pred.append(
@@ -801,6 +815,7 @@ if __name__ == "__main__":
     df_system = pd.DataFrame(
         {
             "step": np.arange(len(U)),
+            "time_h": np.arange(len(U))*0.005,
             "C_A": X[1:, 0],
             "C_B": X[1:, 1],
             "T_R": X[1:, 2],
@@ -811,10 +826,10 @@ if __name__ == "__main__":
             "T_K_pred": X_pred[:, 3],
             "F": U[:, 0],
             "Q_dot": U[:, 1],
-            "sp_C_A": SP[:, 0],
-            "sp_C_B": SP[:, 1],
-            "sp_T_R": SP[:, 2],
-            "sp_T_K": SP[:, 3],
+            "C_A_sp": SP[:, 0],
+            "C_B_sp": SP[:, 1],
+            "T_R_sp": SP[:, 2],
+            "T_K_sp": SP[:, 3],
         }
     )
 

@@ -73,11 +73,12 @@ GAIN_MISMATCH = 1
 N_CONTEXT = 10
 HIDDEN_SIZE = 128
 HORIZON = 10
-WARMUP_TYPE = "X0"  # "NONE", "ZEROS" OR "X0"
-IS_ESTIMATOR = True if WARMUP_TYPE != "NONE" else False
+N_WARMUP = 1
 NUM_ITER = 1050
 EXPERIMENT_ID = "experiment_3.1.1"
 MODEL_NAME = "cts-lstm-batched-128"
+USE_MEAS_NOISE = False
+NOISE_AMP = 0.01
 
 class _TqdmLoggingHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
@@ -176,9 +177,9 @@ class NtiSystem(gym.Env[npt.NDArray[np.floating], float]):
     e_bnd = (0.0, 1e-1)
 
     action_space = Box(*a_bnd, (nu,), np.float64)
-    output_noise_low = np.array([-0.01], dtype=np.float64)
-    output_noise_high = np.array([0.01], dtype=np.float64)
-    use_meas_noise = False
+    output_noise_low = np.array([[-NOISE_AMP], [-NOISE_AMP]], dtype=np.float64)
+    output_noise_high = np.array([[NOISE_AMP], [NOISE_AMP]], dtype=np.float64)
+    use_meas_noise = USE_MEAS_NOISE
 
     def reset(
         self,
@@ -253,7 +254,8 @@ class NtiSystem(gym.Env[npt.NDArray[np.floating], float]):
                 self.output_noise_low, self.output_noise_high
             ).reshape(self.nx, 1)
             x_new = x_new + noise
-
+        x_new[0] = np.clip(x_new[0], 0.0, self.x1_max)
+        x_new[1] = np.clip(x_new[1], 0.0, self.x2_max)
         self.x = x_new
         reward = 0.0
         terminated = False
@@ -397,7 +399,6 @@ class NeuralMpc(Mpc[cs.MX]):
             hidden_size=HIDDEN_SIZE,
             horizon=self.horizon,
             proj_size=1,
-            is_estimator=IS_ESTIMATOR,
             input_order="y_then_u",
         )
 
@@ -419,6 +420,7 @@ class NeuralMpc(Mpc[cs.MX]):
             output_bias=b,
             name="F_neural",
             remove_bounds_on_initial_action=True,
+            n_warmup=N_WARMUP,
         )
 
         xlb_rep = cs.repmat(x_lb, 1, N)
@@ -534,10 +536,7 @@ if __name__ == "__main__":
     state, _ = env.reset(seed=mk_seed(rng), options=None)
 
     X, U, SP, X_pred = [state], [], [], []
-    if WARMUP_TYPE == "X0":
-        state_context = np.tile(state.T, (mpc.n_context, 1))
-    else:
-        state_context = np.zeros((mpc.n_context, NtiSystem.nx))
+    state_context = np.tile(state.T, (mpc.n_context, 1))
     action_context = np.zeros((mpc.n_context, NtiSystem.nu))
 
     exec_times_ms = []
@@ -572,14 +571,10 @@ if __name__ == "__main__":
 
                 obs, _, _, _, _ = env.step(np.asarray(u_opt))
                 state = obs
-                if WARMUP_TYPE == "NONE":
-                    state_context = np.zeros((mpc.n_context, NtiSystem.nx))
-                    action_context = np.zeros((mpc.n_context, NtiSystem.nu))
-                else:
-                    state_context = np.vstack([state_context, obs.T])[-mpc.n_context :]
-                    action_context = np.vstack([action_context, np.asarray(u_opt).T])[
-                        -mpc.n_context :
-                    ]
+                state_context = np.vstack([state_context, obs.T])[-mpc.n_context :]
+                action_context = np.vstack([action_context, np.asarray(u_opt).T])[
+                    -mpc.n_context :
+                ]
 
                 if mpc._last_solution is not None:
                     X_pred.append(
@@ -614,14 +609,15 @@ if __name__ == "__main__":
     df_system = pd.DataFrame(
         {
             "step": np.arange(len(U)),
-            "h1": X[1:, 0],  # State at start of step
-            "h2": X[1:, 1],
-            "h2_pred": X_pred[:],
-            "u": U[:],  # Control applied
-            "sp_h1": SP[:, 0],  # Setpoint active
-            "sp_h2": SP[:, 1],
-            "h1_next": X[1:, 0],  # Resulting state
-            "h2_next": X[1:, 1],
+            "time_s": np.arange(len(U))*4,
+            "h_1": X[1:, 0],  # State at start of step
+            "h_2": X[1:, 1],
+            "h_2_pred": X_pred[:],
+            "u [V]": U[:],  # Control applied
+            "h_1_sp": SP[:, 0],  # Setpoint active
+            "h_2_sp": SP[:, 1],
+            "h_1_next": X[1:, 0],  # Resulting state
+            "h_2_next": X[1:, 1],
         }
     )
 
@@ -629,7 +625,7 @@ if __name__ == "__main__":
         {"step": np.arange(len(exec_times_ms)), "exec_time_ms": exec_times_ms}
     )
 
-    system_file = save_dir / "system_response.csv"
+    system_file = save_dir / "simulation_data.csv"
     bench_file = save_dir / "benchmark_stats.csv"
 
     df_system.to_csv(system_file, index=False)

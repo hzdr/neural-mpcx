@@ -29,7 +29,6 @@ class _CasadiLSTMCore:
         n_inputs,
         hidden_size,
         proj_size,
-        prediction_horizon,
         num_layers=1,
         bias=True,
     ):
@@ -37,10 +36,11 @@ class _CasadiLSTMCore:
         Multi-layer LSTM with optional projection (LSTMP) built in CasADi.
 
         It mirrors PyTorch's LSTM(+projection) layout so you can copy trained weights
-        via `load_state_dict`. The class builds two CasADi functions:
+        via `load_state_dict`. The class builds a single CasADi function:
 
-        - `openlstm_casadi(X, h0, c0, weights...) -> (Y, hN, cN)`  — full rollout over `T`.
-        - `openlstm_casadi_step(X_step, h_prev, c_prev, weights...) -> (Y, hN, cN)` — one step.
+        - `openlstm_casadi_step_full(X_step, h0_l*, c0_l*, weights...) -> (Y, hN_l*, cN_l*)`
+          — one step with per-layer initial states (numeric or symbolic), wrapped
+          by `step_full`.
 
         Gates follow PyTorch's order **[i, f, g, o]**.
 
@@ -49,17 +49,14 @@ class _CasadiLSTMCore:
         n_inputs : int
         hidden_size : int                # H (cell size)
         proj_size : int                  # P; if 0 → no projection, H_out = H
-        prediction_horizon : int         # T (unroll length)
         num_layers : int, default 1
         bias : bool, default True
 
         Shapes (key ones)
         -----------------
-        Full sequence:
-        - X: (T, n_inputs), h0: (H_out,), c0: (H,)
-        - Y: (1, T*H_out)  | hN: (H_out, 1) | cN: (H, 1)
         Single step:
         - X_step: (1, n_inputs) → Y: (1, H_out)
+        - h0 per layer: (H_out, 1) | c0 per layer: (H, 1)
 
         Notes
         -----
@@ -70,7 +67,6 @@ class _CasadiLSTMCore:
         self.n_inputs = n_inputs
         self.hidden_size = hidden_size
         self.proj_size = proj_size
-        self.horizon = prediction_horizon
         self.num_layers = num_layers
         self.bias = bias
 
@@ -78,13 +74,7 @@ class _CasadiLSTMCore:
         self.h_out = proj_size if proj_size > 0 else hidden_size
         self.h_real = self.h_out
 
-        self.X = cs.MX.sym("X", self.horizon, self.n_inputs)
-        self.h0 = cs.MX.sym("h0", self.h_out)
-        self.c0 = cs.MX.sym("c0", self.hidden_size)
-
         self.X_step = cs.MX.sym("X_step", 1, self.n_inputs)
-        self.h_0_step = cs.MX.sym("h_prev", self.h_out, 1)
-        self.c0_step = cs.MX.sym("c_prev", self.hidden_size, 1)
 
         # Parameter symbols (mirroring PyTorch LSTM weight layout)
         self.W_ih = []
@@ -118,76 +108,23 @@ class _CasadiLSTMCore:
         self.b_hh_val = [None] * self.num_layers
         self.W_hr_val = [None] * self.num_layers
 
-        self._build_function()
-        self._build_step_function()
+        self._build_step_function_full()
 
-    def _build_function(self):
-        """Builds the CasADi Function that performs the complete forward pass."""
-        # initial states per layer
-        h_list0 = [cs.reshape(self.h0, self.h_out, 1) for _ in range(self.num_layers)]
-        c_list0 = [
-            cs.reshape(self.c0, self.hidden_size, 1) for _ in range(self.num_layers)
+    def _build_step_function_full(self):
+        """Builds a single-step CasADi Function with per-layer h0/c0 inputs.
+
+        The function takes one (h0, c0) per layer and returns all updated
+        per-layer (hN, cN), so that h/c can be persisted across MPC
+        iterations for arbitrary `num_layers`.
+        """
+        h0_list = [
+            cs.MX.sym(f"h0_l{l}_full", self.h_out, 1) for l in range(self.num_layers)
         ]
-
-        h_list = h_list0
-        c_list = c_list0
-        outputs = []
-
-        # loop through the sequence
-        for t in range(self.horizon):
-            x_t = cs.reshape(self.X[t, :], 1, self.n_inputs)
-            h_list, c_list = self._lstm_step(x_t, h_list, c_list)
-            outputs.append(h_list[-1])  # h: batch x proj_size
-
-        # concatenate all outputs over time
-
-        Y = cs.horzcat(*[o.T for o in outputs])
-        self.Y = Y
-
-        # flatten weights/bias lists for function signature
-        W_ih_args = [w for w in self.W_ih]
-        W_hh_args = [w for w in self.W_hh]
-        b_ih_args = [b for b in self.b_ih]
-        b_hh_args = [b for b in self.b_hh]
-        W_hr_args = [
-            w if w is not None else cs.DM.eye(self.hidden_size) for w in self.W_hr
+        c0_list = [
+            cs.MX.sym(f"c0_l{l}_full", self.hidden_size, 1)
+            for l in range(self.num_layers)
         ]
-
-        # define the CasADi function (uid suffix avoids name collisions on kernel re-run)
-        self.lstm_func = cs.Function(
-            f"openlstm_casadi_{self._uid}",
-            [
-                self.X,
-                self.h0,
-                self.c0,
-                *W_ih_args,
-                *W_hh_args,
-                *b_ih_args,
-                *b_hh_args,
-                *W_hr_args,
-            ],
-            [Y, h_list[-1], c_list[-1]],
-            ["X", "h0", "c0"]
-            + [f"W_ih_l{l}" for l in range(self.num_layers)]
-            + [f"W_hh_l{l}" for l in range(self.num_layers)]
-            + [f"b_ih_l{l}" for l in range(self.num_layers)]
-            + [f"b_hh_l{l}" for l in range(self.num_layers)]
-            + [f"W_hr_l{l}" for l in range(self.num_layers)],
-            ["Y", "hN", "cN"],
-        )
-
-    def _build_step_function(self):
-        """Builds CasADi Function for single LSTM step forward pass."""
-        h_list = [self.h_0_step] + [
-            cs.MX.sym(f"h_prev_l{l}", self.h_out, 1) for l in range(1, self.num_layers)
-        ]
-        c_list = [self.c0_step] + [
-            cs.MX.sym(f"c_prev_l{l}", self.hidden_size, 1)
-            for l in range(1, self.num_layers)
-        ]
-        # reuse _lstm_step to create symbolic output
-        h_list, c_list = self._lstm_step(self.X_step, h_list, c_list)
-        # CasADi function for a single step (still requires weights as input)
+        h_list, c_list = self._lstm_step(self.X_step, h0_list, c0_list)
         Y = h_list[-1].T
 
         W_ih_args = [w for w in self.W_ih]
@@ -198,27 +135,72 @@ class _CasadiLSTMCore:
             w if w is not None else cs.DM.eye(self.hidden_size) for w in self.W_hr
         ]
 
-        self.lstm_step_func = cs.Function(
-            f"openlstm_casadi_step_{self._uid}",
+        self.lstm_step_func_full = cs.Function(
+            f"openlstm_casadi_step_full_{self._uid}",
             [
                 self.X_step,
-                self.h_0_step,
-                self.c0_step,
+                *h0_list,
+                *c0_list,
                 *W_ih_args,
                 *W_hh_args,
                 *b_ih_args,
                 *b_hh_args,
                 *W_hr_args,
             ],
-            [Y, h_list[-1], c_list[-1]],
-            ["X", "h0", "c0"]
+            [Y, *h_list, *c_list],
+            ["X"]
+            + [f"h0_l{l}" for l in range(self.num_layers)]
+            + [f"c0_l{l}" for l in range(self.num_layers)]
             + [f"W_ih_l{l}" for l in range(self.num_layers)]
             + [f"W_hh_l{l}" for l in range(self.num_layers)]
             + [f"b_ih_l{l}" for l in range(self.num_layers)]
             + [f"b_hh_l{l}" for l in range(self.num_layers)]
             + [f"W_hr_l{l}" for l in range(self.num_layers)],
-            ["Y", "hN", "cN"],
+            ["Y"]
+            + [f"hN_l{l}" for l in range(self.num_layers)]
+            + [f"cN_l{l}" for l in range(self.num_layers)],
         )
+
+    def step_full(self, x_t, h_prev_list, c_prev_list):
+        """Run one LSTM step with per-layer initial h/c (numeric or symbolic).
+
+        Parameters
+        ----------
+        x_t : np.ndarray or cs.MX/DM
+            Input at current timestep, shape (1, n_inputs) or (n_inputs,).
+        h_prev_list : list of (h_out, 1)
+            Previous hidden state per layer.
+        c_prev_list : list of (hidden_size, 1)
+            Previous cell state per layer.
+
+        Returns
+        -------
+        y : output, shape (1, h_out)
+        h_next_list : list of (h_out, 1)
+        c_next_list : list of (hidden_size, 1)
+        """
+        if isinstance(x_t, np.ndarray) and x_t.ndim == 1:
+            x_t = x_t[None, :]
+        elif isinstance(x_t, cs.MX):
+            x_t = cs.reshape(x_t, 1, self.n_inputs)
+
+        # Pass raw numeric weights so that purely numeric inputs (numpy or DM)
+        # yield numeric DM outputs; symbolic MX inputs still produce MX outputs
+        # with the weights baked in as DM constants.
+        outs = self.lstm_step_func_full(
+            x_t,
+            *h_prev_list,
+            *c_prev_list,
+            *self.W_ih_val,
+            *self.W_hh_val,
+            *self.b_ih_val,
+            *self.b_hh_val,
+            *self.W_hr_val,
+        )
+        y = outs[0]
+        h_next_list = list(outs[1 : 1 + self.num_layers])
+        c_next_list = list(outs[1 + self.num_layers : 1 + 2 * self.num_layers])
+        return y, h_next_list, c_next_list
 
     @staticmethod
     def _sigmoid(x):
@@ -362,151 +344,12 @@ class _CasadiLSTMCore:
 
         return h, c
 
-    def forward(self, X_val, h0_val, c0_val):
-        """
-        Executes the LSTM forward pass.
-
-        Args:
-            X_val (np.ndarray): shape (sequence_len, n_inputs)
-            h0_val (np.ndarray): shape (proj_size)
-            c0_val (np.ndarray): shape (hidden_size)
-
-        Returns:
-            Y (np.ndarray): concatenated output, shape (seq_len * proj_size)
-            hN (np.ndarray): final h state, shape (proj_size)
-            cN (np.ndarray): final c state, shape (hidden_size)
-        """
-        vals = [X_val, h0_val, c0_val]
-
-        # pack parameters per layer
-        for l in range(self.num_layers):
-            vals.append(self.W_ih_val[l])
-        for l in range(self.num_layers):
-            vals.append(self.W_hh_val[l])
-        for l in range(self.num_layers):
-            vals.append(self.b_ih_val[l])
-        for l in range(self.num_layers):
-            vals.append(self.b_hh_val[l])
-        for l in range(self.num_layers):
-            vals.append(self.W_hr_val[l])
-
-        return self.lstm_func(*vals)
-
-    def forward_one_step(self, x_t, h_0_val, c_0_val):
-        """
-        Executes a single LSTM step.
-        x_t: (1, n_inputs)  -- can be np.ndarray 1D, 2D or MX
-        h_0_val: (h_out, 1) -- MX recommended
-        c_0_val: (hidden_size, 1) -- can come as np, we will convert to MX
-        """
-        # reshape NumPy → (1,n_inputs)
-        if isinstance(x_t, np.ndarray) and x_t.ndim == 1:
-            x_t = x_t[None, :]
-        # symbolic reshape → (1,n_inputs)
-        elif isinstance(x_t, cs.MX):
-            x_t = cs.reshape(x_t, 1, self.n_inputs)
-
-        # weights/bias per layer: expand lists and convert to MX
-        W_ih_args = [cs.MX(self.W_ih_val[l]) for l in range(self.num_layers)]
-        W_hh_args = [cs.MX(self.W_hh_val[l]) for l in range(self.num_layers)]
-        b_ih_args = [cs.MX(self.b_ih_val[l]) for l in range(self.num_layers)]
-        b_hh_args = [cs.MX(self.b_hh_val[l]) for l in range(self.num_layers)]
-        W_hr_args = [cs.MX(self.W_hr_val[l]) for l in range(self.num_layers)]
-
-        return self.lstm_step_func(
-            x_t,  # (1,n_inputs)
-            h_0_val,  # (proj_size,1)
-            c_0_val,  # (hidden_size,1)
-            *W_ih_args,
-            *W_hh_args,
-            *b_ih_args,
-            *b_hh_args,
-            *W_hr_args,
-        )
-
-    def compute_sensitivities(self, X_val, h0_val, c0_val):
-        """
-        Computes the sensitivity dY/dX for ALL inputs.
-
-        Args:
-            X_val (np.ndarray): shape (horizon, n_inputs)  [or (1, horizon, n_inputs) if batch_first True]
-            h0_val (np.ndarray): shape (h_out,)  # h_out = proj_size>0 ? proj_size : hidden_size
-            c0_val (np.ndarray): shape (hidden_size,)
-
-        Returns:
-            sens (np.ndarray): dY/dX stacked by feature, shape (horizon * h_out, horizon, n_inputs)
-                            where sens[:, :, j] = dY/dX[:, column_of_feature_j_over_time]
-        """
-        # Build of jac_func (identical to the one used in _build_function), only once
-        if not hasattr(self, "jac_func"):
-            jac_sym = cs.jacobian(self.Y, self.X)
-
-            W_ih_args = [w for w in self.W_ih]
-            W_hh_args = [w for w in self.W_hh]
-            b_ih_args = [b for b in self.b_ih]
-            b_hh_args = [b for b in self.b_hh]
-            # if proj_size==0, W_hr contains None → use HxH identity
-            W_hr_args = [
-                w if w is not None else cs.DM.eye(self.hidden_size) for w in self.W_hr
-            ]
-
-            self.jac_func = cs.Function(
-                "jac_lstm",
-                [
-                    self.X,
-                    self.h0,
-                    self.c0,
-                    *W_ih_args,
-                    *W_hh_args,
-                    *b_ih_args,
-                    *b_hh_args,
-                    *W_hr_args,
-                ],
-                [jac_sym],
-                ["X", "h0", "c0"]
-                + [f"W_ih_l{l}" for l in range(self.num_layers)]
-                + [f"W_hh_l{l}" for l in range(self.num_layers)]
-                + [f"b_ih_l{l}" for l in range(self.num_layers)]
-                + [f"b_hh_l{l}" for l in range(self.num_layers)]
-                + [f"W_hr_l{l}" for l in range(self.num_layers)],
-                ["dY_dX"],
-            )
-
-        # h0_val must have dimension h_out (covers proj_size==0 or >0)
-        vals = [X_val, h0_val, c0_val]
-        vals += [self.W_ih_val[l] for l in range(self.num_layers)]
-        vals += [self.W_hh_val[l] for l in range(self.num_layers)]
-        vals += [self.b_ih_val[l] for l in range(self.num_layers)]
-        vals += [self.b_hh_val[l] for l in range(self.num_layers)]
-        vals += [
-            self.W_hr_val[l] for l in range(self.num_layers)
-        ]  # HxH identity if proj_size==0
-
-        jac_dm = self.jac_func(*vals)[0]  # DM/MX
-        jac_np = np.array(jac_dm)  # (horizon*h_out, horizon*n_inputs)
-
-        # CasADi indices for matrix X (column order):
-        # column (t, j) -> idx = t + j * horizon
-        # We build the columns of each feature j over time t=0..T-1
-        T = self.horizon
-        J = self.n_inputs
-
-        sens_list = []
-        for j in range(J):
-            idx_j = [t + j * T for t in range(T)]
-            sens_j = jac_np[:, idx_j]  # (horizon*h_out, horizon)
-            sens_list.append(sens_j)
-
-        # Stack along the features axis: (horizon*h_out, horizon, n_inputs)
-        sens = np.stack(sens_list, axis=2)
-
-        return sens
-
 
 class CasadiLSTM:
     """
-    CasADi LSTM for neural MPC: builds symbolic LSTM functions, loads PyTorch
-    weights, and runs estimate-then-predict forward passes with I/O adaptation.
+    CasADi LSTM for stateful neural MPC: builds a symbolic single-step LSTM,
+    loads PyTorch weights, and rolls the prediction horizon forward from
+    externally maintained hidden/cell states with I/O adaptation.
 
     Usage
     -----
@@ -515,20 +358,20 @@ class CasadiLSTM:
     ...     horizon=20, proj_size=4, input_order="y_then_u",
     ... )
     >>> model.load_state_dict(torch.load("model.pt"))
-    >>> mpc.set_neural_dynamics(model=model, input_order="y_then_u", output_bias=b)
+    >>> mpc.set_neural_dynamics(model=model, input_order="y_then_u", n_warmup=1)
 
-    Modes
-    -----
-    - Estimator (default): use the first `n_context` samples to estimate internal
-      states (`hn`, `cn`), then predict the next `horizon` steps from inputs.
-      `forward()` returns output with shape `(output_size, sequence_length)`.
-    - Pure forward: set `is_estimator=False` to call the underlying model directly
-      with stored `hn`, `cn`.
+    Stateful contract
+    -----------------
+    The LSTM never estimates its own initial state inside the symbolic graph.
+    Instead, per-layer hidden/cell states are maintained numerically between
+    MPC solves via the teacher-forced helpers `estimate_numeric` (full context
+    window) and `step_numeric` (single step), and passed to `forward(inp, h0=,
+    c0=)` as the starting point of the symbolic prediction rollout.
 
     Parameters
     ----------
     n_context : int
-        Number of measured context samples for state estimation.
+        Number of measured context samples used for the numeric warmup.
     n_inputs : int
         Number of control inputs (u).
     hidden_size : int
@@ -541,8 +384,6 @@ class CasadiLSTM:
         Whether to use bias terms.
     proj_size : int, default 0
         Projection size P. If 0, output size equals hidden_size.
-    is_estimator : bool, default True
-        Whether to use context-window state estimation.
     input_order : str, default "y_then_u"
         How features are stacked in the input: "y_then_u" or "u_then_y".
         Must match the `input_order` passed to `set_neural_dynamics`.
@@ -553,8 +394,6 @@ class CasadiLSTM:
         Output dimension (proj_size if >0, else hidden_size).
     sequence_length : int
         Total sequence length (n_context + horizon).
-    hn, cn : array_like or None
-        Last hidden/cell states (set by `estimate_state`).
     """
 
     def __init__(
@@ -566,14 +405,12 @@ class CasadiLSTM:
         num_layers: int = 1,
         bias: bool = True,
         proj_size: int = 0,
-        is_estimator: bool = True,
         input_order: str = "y_then_u",
     ):
         self.n_context = n_context
         self.horizon = horizon
         self.n_inputs = n_inputs
         self.sequence_length = n_context + horizon
-        self.is_estimator = is_estimator
         self.proj_size = proj_size
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -586,12 +423,9 @@ class CasadiLSTM:
             n_inputs=n_inputs,
             hidden_size=hidden_size,
             proj_size=proj_size,
-            prediction_horizon=horizon,
             num_layers=num_layers,
             bias=bias,
         )
-        self.hn = None
-        self.cn = None
 
     def load_state_dict(self, state_dict):
         """Load PyTorch-style weights into the LSTM.
@@ -605,104 +439,122 @@ class CasadiLSTM:
         """
         self._core.load_state_dict(state_dict)
 
-    def forward(self, inp):
-        """Forward pass with I/O adaptation for MPC integration.
+    def forward(self, inp, *, h0, c0):
+        """Roll the LSTM over the prediction horizon from external h0/c0.
 
         Accepts stacked features from `set_neural_dynamics`, transposes and
-        reorders them, runs estimate-then-predict, and returns normalized output.
+        reorders them, and builds the symbolic graph by chaining single-step
+        calls to `_core.step_full` for `t = n_context .. sequence_length-1`.
+        Outputs over the context window are zero-padded — the MPC dynamics
+        constraint slices `[:, n_context:]` and ignores them.
 
         Parameters
         ----------
         inp : cs.MX, cs.DM, or torch.Tensor
             Stacked features with shape (output_size + n_inputs, sequence_length).
             Column ordering depends on `input_order`.
+        h0, c0 : list of cs.MX
+            Per-layer initial hidden/cell states, maintained between solves
+            by `estimate_numeric`/`step_numeric`.
 
         Returns
         -------
-        cs.MX or cs.DM
-            Model output with shape (output_size, sequence_length).
+        cs.MX
+            Normalized output, shape (output_size, sequence_length).
         """
-        # Transpose + reorder: (n_features, T) → (T, n_features) in [u, y] order
-        feats_t = self._reorder(inp)
+        # Transpose + reorder: (n_features, T) → (T, n_features) in [u, y]
+        # order; only the u columns drive the rollout.
+        u_cols = self._reorder(inp)[:, : self.n_inputs]
 
-        if self.is_estimator:
-            # feats_t columns are [u_0..u_{n_inputs-1}, y_0..y_{h_out-1}]
-            u_cols = feats_t[:, : self.n_inputs]
-            y_cols = feats_t[:, self.n_inputs :]
+        outputs = []
+        h_list = list(h0)
+        c_list = list(c0)
+        for t in range(self.n_context, self.sequence_length):
+            x_t = cs.reshape(u_cols[t, :], 1, self.n_inputs)
+            y_t, h_list, c_list = self._core.step_full(x_t, h_list, c_list)
+            outputs.append(y_t)  # (1, h_out)
 
-            y_est = self.estimate_state(u_cols, y_cols, self.n_context)
-            y_pred = self.predict_state(u_cols, self.n_context)
-            y_sim = cs.horzcat(y_est, y_pred)
-        else:
-            self.hn = np.zeros(self.h_out)
-            self.cn = np.zeros(self.hidden_size)
-
-            u_cols = feats_t[:, : self.n_inputs]
-            y_cols = feats_t[:, self.n_inputs :]
-
-            y_est = np.zeros((1, self.n_context * self.h_out))
-            y_pred = self.predict_state(u_cols, self.n_context)
-            y_sim = cs.horzcat(y_est, y_pred)
-
+        y_pred = cs.horzcat(*outputs)  # (1, horizon * h_out)
+        y_pad = np.zeros((1, self.n_context * self.h_out))
+        y_sim = cs.horzcat(y_pad, y_pred)
         return self._normalize_output(y_sim)
 
-    def __call__(self, inp):
-        return self.forward(inp)
+    def __call__(self, inp, *, h0, c0):
+        return self.forward(inp, h0=h0, c0=c0)
 
-    def estimate_state(self, u_train, y_train, nstep):
-        """Estimate RNN hidden states using measured outputs over context window.
+    def estimate_numeric(self, u_ctx, y_ctx, h_seed=None, c_seed=None):
+        """Teacher-forced numeric rollout over the context window.
 
-        Uses measured outputs (y_train) as pseudo-inputs to warm up the RNN's
-        internal hidden and cell states, mimicking teacher forcing during training.
-
-        Parameters
-        ----------
-        u_train : array_like or cs.MX
-            Input sequence, shape (sequence_length, n_inputs).
-        y_train : array_like or cs.MX
-            Measured output sequence, shape (sequence_length, h_out).
-        nstep : int
-            Number of context steps to use for state estimation.
-
-        Returns
-        -------
-        cs.MX
-            Estimated outputs over context window, shape (1, nstep * h_out).
-        """
-        y_est = []
-        # Initialize hidden and cell states
-        hn = np.zeros(self.h_out)
-        cn = np.zeros(self.hidden_size)
-        for i in range(nstep):
-            # Feed in the known output to estimate state
-            out, hn, cn = self._core.forward_one_step(
-                cs.reshape(u_train[i, :], 1, self.n_inputs),
-                cs.reshape(y_train[i, :], self.h_out, 1),
-                cn,
-            )
-            y_est.append(out)
-
-        y_sim = cs.horzcat(*y_est)
-        self.hn, self.cn = hn, cn  # Store hidden and cell states for prediction
-        return y_sim
-
-    def predict_state(self, u_train, nstep):
-        """Predict outputs using stored hidden states from estimation phase.
+        Executes purely numerically using `_core.step_full`. The LSTM's
+        layer-0 hidden state is overwritten with the measured `y` at each
+        step (teacher forcing, mirroring how the network is trained); the
+        cell state and higher-layer hidden states are propagated.
 
         Parameters
         ----------
-        u_train : array_like or cs.MX
-            Full input sequence, shape (sequence_length, n_inputs).
-        nstep : int
-            Context length; predictions start from u_train[nstep:, :].
+        u_ctx : array_like, shape (n_steps, n_inputs)
+        y_ctx : array_like, shape (n_steps, h_out)
+        h_seed, c_seed : list of np.ndarray, optional
+            Per-layer initial states. Default to zeros.
 
         Returns
         -------
-        cs.MX
-            Predicted outputs over prediction horizon, shape (1, horizon * h_out).
+        h_new, c_new : list of np.ndarray
+            Per-layer updated hidden/cell states, each (h_out,1) / (hidden_size,1).
         """
-        y_sim, _, _ = self._core.forward(u_train[nstep:, :], self.hn, self.cn)
-        return y_sim
+        if h_seed is None:
+            h_list = [np.zeros((self.h_out, 1)) for _ in range(self.num_layers)]
+        else:
+            h_list = [np.asarray(h, dtype=float).reshape(self.h_out, 1) for h in h_seed]
+        if c_seed is None:
+            c_list = [np.zeros((self.hidden_size, 1)) for _ in range(self.num_layers)]
+        else:
+            c_list = [
+                np.asarray(c, dtype=float).reshape(self.hidden_size, 1) for c in c_seed
+            ]
+
+        u_arr = np.asarray(u_ctx, dtype=float)
+        y_arr = np.asarray(y_ctx, dtype=float)
+        n = u_arr.shape[0]
+        for i in range(n):
+            u_t = u_arr[i].reshape(1, self.n_inputs)
+            y_t = y_arr[i].reshape(self.h_out, 1)
+            # Teacher forcing on layer 0
+            h_list = [y_t] + h_list[1:]
+            _, h_list, c_list = self._core.step_full(u_t, h_list, c_list)
+
+        h_np = [np.asarray(h).reshape(self.h_out, 1) for h in h_list]
+        c_np = [np.asarray(c).reshape(self.hidden_size, 1) for c in c_list]
+        return h_np, c_np
+
+    def step_numeric(self, u_step, y_step, h_prev, c_prev):
+        """Advance the LSTM one numeric step using teacher forcing.
+
+        Used between MPC solves to advance the persisted (h, c) buffers
+        with the latest measured `(u, y)`. Teacher forcing replaces the
+        layer-0 hidden state with `y_step` so the measurement directly
+        corrects the LSTM's memory.
+
+        Parameters
+        ----------
+        u_step : array_like, shape (n_inputs,)
+        y_step : array_like, shape (h_out,)
+        h_prev, c_prev : list of np.ndarray
+            Per-layer previous states.
+
+        Returns
+        -------
+        h_new, c_new : list of np.ndarray
+        """
+        h_list = [np.asarray(h, dtype=float).reshape(self.h_out, 1) for h in h_prev]
+        c_list = [np.asarray(c, dtype=float).reshape(self.hidden_size, 1) for c in c_prev]
+        u_t = np.asarray(u_step, dtype=float).reshape(1, self.n_inputs)
+        y_t = np.asarray(y_step, dtype=float).reshape(self.h_out, 1)
+        h_list = [y_t] + h_list[1:]
+        _, h_new, c_new = self._core.step_full(u_t, h_list, c_list)
+        h_np = [np.asarray(h).reshape(self.h_out, 1) for h in h_new]
+        c_np = [np.asarray(c).reshape(self.hidden_size, 1) for c in c_new]
+        return h_np, c_np
 
     def get_model(self):
         """Get the underlying core LSTM model.
@@ -713,25 +565,6 @@ class CasadiLSTM:
             The inner LSTM model instance.
         """
         return self._core
-
-    def compute_sensitivities(self, X_val):
-        """Compute Jacobian of outputs w.r.t. inputs over prediction horizon.
-
-        Parameters
-        ----------
-        X_val : np.ndarray
-            Full input features (stacked as per `input_order`),
-            shape (output_size + n_inputs, sequence_length).
-
-        Returns
-        -------
-        np.ndarray
-            Jacobian dY/dX with shape (horizon * h_out, horizon, n_inputs).
-        """
-        X_t = self._reorder(X_val)
-        return self._core.compute_sensitivities(
-            X_t[self.n_context :, : self.n_inputs], self.hn, self.cn
-        )
 
     def _reorder(self, mat):
         """Transpose and reorder input from (n_features, T) to (T, n_features).

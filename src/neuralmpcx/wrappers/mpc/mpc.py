@@ -12,7 +12,7 @@ import logging
 from collections.abc import Collection, Iterable
 from itertools import chain
 from math import ceil
-from typing import Callable, Literal, Optional, Tuple, TypeVar, Union
+from typing import Any, Callable, Literal, Optional, Tuple, TypeVar, Union
 
 import casadi as cs
 import numpy as np
@@ -241,6 +241,18 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         self._disturbances: dict[str, SymType] = {}
         self._dynamics: cs.Function = None
 
+        # Stateful neural-MPC bookkeeping (populated by set_neural_dynamics + solve_mpc)
+        self._n_warmup: int = 1
+        self._solve_count: int = 0
+        self._lstm_h: Optional[list[np.ndarray]] = None
+        self._lstm_c: Optional[list[np.ndarray]] = None
+        self._lstm_model: object = None
+        self._lstm_layers: int = 0
+        self._lstm_h_out: int = 0
+        self._lstm_hidden: int = 0
+        self._h0_nlp_param: Optional[SymType] = None
+        self._c0_nlp_param: Optional[SymType] = None
+
     @property
     def prediction_horizon(self) -> int:
         """Gets the prediction horizon of the MPC controller."""
@@ -331,6 +343,32 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         function can have multiple outputs, in which case :math:`x_+` is assumed to be
         the first one."""
         return self._dynamics
+
+    @property
+    def is_warmed_up(self) -> bool:
+        """True once the stateful LSTM has been executed for `n_warmup` solves.
+
+        Only meaningful when the dynamics were registered via
+        `set_neural_dynamics`. After warmup, `solve_mpc()` advances
+        `_lstm_h`/`_lstm_c` incrementally instead of re-estimating from the
+        context window.
+        """
+        return self._lstm_model is not None and self._solve_count >= self._n_warmup
+
+    def reset_lstm_state(self) -> None:
+        """Force the next `solve_mpc()` call to re-warmup the LSTM.
+
+        Zeros the persisted hidden/cell buffers and resets the solve counter,
+        so subsequent solves re-run the warmup phase from the context window
+        (seeded with zeros, since previous h/c are cleared). Use this when
+        you suspect the persisted state has drifted from the real system —
+        the `state_context`/`action_context` arrays act as the recovery
+        truth data. No-op unless dynamics were registered via
+        `set_neural_dynamics`.
+        """
+        self._lstm_h = None
+        self._lstm_c = None
+        self._solve_count = 0
 
     def state(
         self,
@@ -526,13 +564,24 @@ class Mpc(NonRetroactiveWrapper[SymType]):
             Literal["last", "last-successful"], WarmStartStrategy
         ] = "last-successful",
         use_last_action_on_fail: bool = False,
+        n_warmup: int = 1,
     ) -> None:
         """
         Build and register a CasADi dynamics function from a neural wrapper.
 
-        Creates `casadi.Function name: F(x, u[, d]) -> y_next` from a callable model
-        (e.g., `CasadiLSTM`), registers it via `self.set_dynamics(...)`, and
-        finalizes MPC setup with `self._setup_Neural_MPC(...)`.
+        Creates `casadi.Function name: F(x, u, h0, c0[, d]) -> y_next` from a
+        callable model (e.g., `CasadiLSTM`), registers it via
+        `self.set_dynamics(...)`, and finalizes MPC setup with
+        `self._setup_Neural_MPC(...)`.
+
+        The LSTM is stateful: its hidden/cell states are persisted across
+        `solve_mpc()` calls. F is built with two NLP parameters ``h0``
+        (shape ``(num_layers*h_out, 1)``) and ``c0`` (shape
+        ``(num_layers*hidden_size, 1)``); the first `n_warmup` solves
+        re-estimate `(h, c)` from the context window via teacher forcing
+        (seeded with the previous solve's `(h, c)` — hybrid warmup), and
+        subsequent solves advance them one numeric step using the latest
+        measured `(u, y)`.
 
         Args
         ----
@@ -557,6 +606,12 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         remove_bounds_on_initial_action : bool = False
         warmstart : {"last","last-successful"} | WarmStartStrategy = "last-successful"
         use_last_action_on_fail : bool = False
+        n_warmup : int = 1
+            Number of initial `solve_mpc()` calls during which the persisted
+            LSTM hidden/cell buffers are re-estimated from the full context
+            window (seeded with the previous solve's `(h, c)`). After warmup,
+            the buffers are advanced one teacher-forced step per solve using
+            the latest measured `(u, y)`.
 
         What it handles
         ---------------
@@ -579,6 +634,11 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         - Registers `F` via `self.set_dynamics(..., warmstart=..., use_last_action_on_fail=...)`.
         - Calls `self._setup_Neural_MPC(remove_bounds_on_initial_action)`.
         """
+        if isinstance(model, cs.Function):
+            raise RuntimeError(
+                "casadi.Function must be directly pass to set_dynamics() method; "
+                "set_neural_dynamics is for callable models (e.g. CasadiLSTM)."
+            )
         if casadi_opts is None:
             casadi_opts = {"allow_free": True, "cse": True}
 
@@ -592,6 +652,31 @@ class Mpc(NonRetroactiveWrapper[SymType]):
                 "Actions and states should have the same sequence length."
             )
         n_ctx = getattr(self, "n_context", getattr(self, "_n_context", 0))
+
+        # Register h0/c0 NLP parameters for the persisted LSTM state.
+        if not isinstance(n_warmup, int) or n_warmup < 1:
+            raise ValueError("n_warmup must be a positive integer.")
+        n_layers = int(getattr(model, "num_layers", 1))
+        h_out = int(model.h_out)
+        hidden = int(model.hidden_size)
+        H = n_layers * h_out
+        C = n_layers * hidden
+        h0_par = self.nlp.parameter("h0", (H, 1))
+        c0_par = self.nlp.parameter("c0", (C, 1))
+        h0_sym = cs.MX.sym("h0", H, 1)
+        c0_sym = cs.MX.sym("c0", C, 1)
+        # Per-layer slicing for the model API
+        h0_list = [h0_sym[l * h_out : (l + 1) * h_out, :] for l in range(n_layers)]
+        c0_list = [c0_sym[l * hidden : (l + 1) * hidden, :] for l in range(n_layers)]
+        # Persist layout so solve_mpc() knows the shapes
+        self._lstm_model = model
+        self._lstm_layers = n_layers
+        self._lstm_h_out = h_out
+        self._lstm_hidden = hidden
+        self._n_warmup = n_warmup
+        # Keep references to NLP-level params so the dynamics builders can wire them
+        self._h0_nlp_param = h0_par
+        self._c0_nlp_param = c0_par
 
         # Symbolic variables
         x_sym = cs.MX.sym("x", nx, T)
@@ -626,19 +711,14 @@ class Mpc(NonRetroactiveWrapper[SymType]):
             stack = _smooth_clip(stack, lo, hi)
 
         # model/wrapper call (duck-typing: __call__ or .forward)
-        def _call_model(inp):
-            if isinstance(model, cs.Function):
-                raise RuntimeError(
-                    "casadi.Function must be directly pass to set_dynamics() method; "
-                    "set_neural_dynamics is for callable models (e.g. CasadiLSTM)."
-                )
+        def _call_model(inp, **kwargs):
             if hasattr(model, "__call__"):
-                return model(inp)
+                return model(inp, **kwargs)
             if hasattr(model, "forward"):
-                return model.forward(inp)
+                return model.forward(inp, **kwargs)
             raise TypeError(" *model* is not callable nor has .forward(...)")
 
-        y_pred = _call_model(stack)
+        y_pred = _call_model(stack, h0=h0_list, c0=c0_list)
         if not isinstance(y_pred, (cs.MX, cs.SX, cs.DM)):
             raise TypeError("Model output should be CasADi (MX/SX/DM).")
 
@@ -663,8 +743,8 @@ class Mpc(NonRetroactiveWrapper[SymType]):
             y_norm = _smooth_clip(y_norm, lo, hi)
 
         # F formal inputs
-        in_args = [x_sym, u_sym]
-        in_names = ["x", "u"]
+        in_args = [x_sym, u_sym, h0_sym, c0_sym]
+        in_names = ["x", "u", "h0", "c0"]
         if allow_disturbances and list(self._disturbances.values()):
             D = cs.vcat(self._disturbances.values())
             nd, Td = int(D.size1()), int(D.size2())
@@ -714,7 +794,9 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         Raises
         ------
         ValueError
-            When setting, raises if the dynamics do not accept 2 or 3 input arguments.
+            When setting, raises if the dynamics do not accept 2 or 3 input
+            arguments (2 to 5 for neural MPC, where F may also take the
+            ``h0``/``c0`` LSTM state parameters).
         RuntimeError
             When setting, raises if the dynamics have been already set; or if the
             function ``F`` does not take accept the expected input sizes.
@@ -730,10 +812,12 @@ class Mpc(NonRetroactiveWrapper[SymType]):
                 "casadi function."
             )
         if self._neural:
-            if n_in is None or n_in > 2 or n_in < 1 or n_out is None or n_out < 1:
+            # Neural F may have: (x, u), (x, u, d), (x, u, h0, c0), or (x, u, h0, c0, d).
+            if n_in is None or n_in < 2 or n_in > 5 or n_out is None or n_out < 1:
                 raise ValueError(
-                    "The dynamics function must accept 1 or 2 arguments and return "
-                    f"at least 1 output; got {n_in} inputs and {n_out} outputs instead."
+                    "The dynamics function must accept between 2 and 5 arguments "
+                    f"and return at least 1 output; got {n_in} inputs and {n_out} "
+                    "outputs instead."
                 )
         else:
             if n_in is None or n_in < 2 or n_in > 3 or n_out is None or n_out < 1:
@@ -906,6 +990,33 @@ class Mpc(NonRetroactiveWrapper[SymType]):
             additional_pars.update(u0_dict)
             setpoint = np.array(setpoint)
             additional_pars["SP"] = setpoint[state_indices, 0]
+
+            if self._lstm_model is not None:
+                # Numerical state update outside F: warmup re-estimates the
+                # context window seeded from previous (h, c); post-warmup
+                # advances one step using the latest measured (u, y).
+                y_ctx = np.asarray(state_context)[
+                    -self._n_context :, state_indices
+                ]  # (n_ctx, ny)
+                u_ctx = np.asarray(action_context)[-self._n_context :, :]  # (n_ctx, nu)
+                if self._solve_count < self._n_warmup:
+                    self._lstm_h, self._lstm_c = self._lstm_model.estimate_numeric(
+                        u_ctx,
+                        y_ctx,
+                        h_seed=self._lstm_h,
+                        c_seed=self._lstm_c,
+                    )
+                else:
+                    self._lstm_h, self._lstm_c = self._lstm_model.step_numeric(
+                        u_ctx[-1], y_ctx[-1], self._lstm_h, self._lstm_c
+                    )
+                additional_pars["h0"] = np.concatenate(
+                    [np.asarray(h).ravel() for h in self._lstm_h]
+                )[:, None]
+                additional_pars["c0"] = np.concatenate(
+                    [np.asarray(c).ravel() for c in self._lstm_c]
+                )[:, None]
+                self._solve_count += 1
         else:
             mpcstates = self.initial_states
             mpcactions = self.initial_actions
@@ -1024,17 +1135,20 @@ class Mpc(NonRetroactiveWrapper[SymType]):
     def _neural_multishooting_dynamics(self, F: cs.Function, n_in: int) -> None:
         """Creates vectorized dynamics constraints for neural MPC multi-shooting.
 
-        Calls F(X, U) over full horizon with context window handling.
-        Constraints enforce x[:, n_context:] == F(X, U)[:, n_context:].
+        Calls F(X, U[, h0, c0][, D]) over the full horizon with context window
+        handling. Constraints enforce x[:, n_context:] == F(...)[:, n_context:].
+        When the dynamics were built by `set_neural_dynamics`, the `h0`, `c0`
+        NLP parameters are threaded as formal inputs to F.
         """
         X = cs.vcat(self._states.values())
         U = cs.vcat(self._actions_exp.values())
 
+        args_at: tuple[Any, ...] = (X, U)
+        if self._h0_nlp_param is not None:
+            args_at = args_at + (self._h0_nlp_param, self._c0_nlp_param)
         if list(self._disturbances.values()):
             D = cs.vcat(self._disturbances.values())
-            args_at = (X, U, D)
-        else:
-            args_at = (X, U)
+            args_at = args_at + (D,)
 
         xs_next = F(*args_at)
         self.constraint(
@@ -1069,19 +1183,27 @@ class Mpc(NonRetroactiveWrapper[SymType]):
 
         Constructs the full state trajectory by padding the initial state context X0 with zeros
         to match the prediction horizon, then calling the vectorized neural dynamics F(X0_padded, U).
+        When the dynamics were built by `set_neural_dynamics`, the `h0`/`c0` NLP
+        parameters are passed to F as well.
         """
         U = cs.vcat(self._actions_exp.values())
         X0 = cs.vcat(self._initial_states.values())
 
+        args_at: tuple[Any, ...]
         if list(self._disturbances.values()):
             D = cs.vcat(self._disturbances.values())
             X0_padded = cs.horzcat(
                 X0, cs.DM.zeros(X0.size1(), U.size2() + D.size2() - X0.size2())
             )
-            args_at = (X0_padded, U, D)
+            args_at = (X0_padded, U)
+            if self._h0_nlp_param is not None:
+                args_at = args_at + (self._h0_nlp_param, self._c0_nlp_param)
+            args_at = args_at + (D,)
         else:
             X0_padded = cs.horzcat(X0, cs.DM.zeros(X0.size1(), U.size2() - X0.size2()))
             args_at = (X0_padded, U)
+            if self._h0_nlp_param is not None:
+                args_at = args_at + (self._h0_nlp_param, self._c0_nlp_param)
 
         X_next = F(*args_at)
         X = X_next

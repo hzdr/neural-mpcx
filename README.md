@@ -158,31 +158,63 @@ The `AugmentedKalmanFilter` estimates plant state, input bias, and output bias a
 NeuralMPCX uses recurrent neural networks as internal dynamics models inside the MPC. Making this work required several adaptations:
 
 - Converting PyTorch RNNs into CasADi
-- Providing arrays of context actions and states to warm up the neural model
-- `x0` is an array with `n_context` timesteps
-- `u0` is also required with `n_context` timesteps
+- Providing rolling arrays of context actions and states (`u0` and `x0`, each with `n_context` timesteps) that feed the LSTM warmup
+- Persisting the LSTM hidden/cell states across MPC solves
 
-The initial hidden state comes from a context window of past observations, following [**[5]**](#5). Only LSTM networks are supported so far.
+Only LSTM networks are supported so far.
 
-An RNN’s initial state, often set to zero, shapes its first predictions. In MPC, this initial state determines how the network reads the system’s dynamics and how well it predicts future states.
-
-NeuralMPCX implements the approach from [[5]](#5), where the predicted output $\hat{y}_k$ is part of the state:
+An RNN's initial state, often set to zero, shapes its first predictions. In MPC, this initial state determines how the network reads the system's dynamics and how well it predicts future states. NeuralMPCX builds on the approach from [**[5]**](#5), where the predicted output $\hat{y}_k$ is part of the state:
 
 $$
 x_{k+1} = \mathcal{F} (x_k, \hat{y}_k,u_k;\theta_\mathcal{F}) \\\hat{y}_{k+1} = \mathcal{G} (x_{k+1}, \hat{y}_k,u_k;\theta_\mathcal{G})
 $$
 
-Predictions follow the equations above. The initial state is estimated from a window of past data $\{ y_{k-1}, \ldots, y_{k-N_c} \, u_{k-1}, \ldots, u_{k-N_c} \}$. For $N_c$ steps, measured outputs $y_{k-i}$ are fed to the model instead of predicted ones, and $x_{k-N_c}$ is set to zero. The state estimation opens the output prediction loop for those first $N_c$ steps:
+During training, the initial state is estimated from a window of past data $\{ y_{k-1}, \ldots, y_{k-N_c}, u_{k-1}, \ldots, u_{k-N_c} \}$: for $N_c$ steps, measured outputs $y_{k-i}$ are fed to the model instead of predicted ones (teacher forcing), and $x_{k-N_c}$ is set to zero. The model acts as its own state estimator, so training runs a joint backward pass over both estimation and forecasting.
 
-$$
-x_{k+1} = \mathcal{F} (x_k, y_k,u_k;\theta_\mathcal{F}) \\y_{k+1} = \mathcal{G} (x_{k+1}, y_k,u_k;\theta_\mathcal{G}) \\ for~k = 0,1,...,\mathcal{N}_c-1
-$$
+At deployment, NeuralMPCX makes the LSTM **stateful**: its hidden and cell states $(h, c)$ persist on the `Mpc` instance across `solve_mpc()` calls and enter the optimization problem as plain NLP parameters `h0`/`c0`. The dynamics function `F(x, u, h0, c0)` simply unrolls the LSTM symbolically over the prediction horizon starting from these states — no state estimation happens inside the optimizer, which keeps the NLP graph small and the solve fast.
 
-The model acts as its own state estimator, so training runs a joint backward pass over both estimation and forecasting. Sequences are split as shown below.
+### The warmup algorithm
 
-![Each MPC iteration initializes the RNN's state from an array of past data. You update this context array at every step. Adapted from [[5]](#5).](fig/warmed_up_neural_mpc.png)
+The persisted $(h, c)$ are maintained numerically, outside the NLP, using **teacher forcing** — exactly mirroring how the network was trained:
 
-Each MPC iteration initializes the RNN's state from an array of past data. You update this context array at every step. Adapted from [[5]](#5).
+1. **Teacher-forced context step.** For each context sample $(u_t, y_t)$, the layer-0 hidden state is *replaced by the measured output* $y_t$, the action $u_t$ is fed as input, and $(h, c)$ propagate through all layers. Each measurement therefore directly corrects the LSTM's memory.
+
+2. **Hybrid warmup phase** (the first `n_warmup` solves). Each `solve_mpc()` call re-runs the teacher-forced pass over the *full* `n_context` window, *seeded with the previous solve's* $(h, c)$ (zeros on the very first solve). This blends fresh measurements with accumulated memory while the buffers settle.
+
+3. **Steady-state phase** (after `n_warmup` solves). Each solve advances $(h, c)$ by exactly *one* teacher-forced step using the newest measured $(u, y)$ — O(1) work per solve instead of O(`n_context`).
+
+4. **Inside the NLP.** The resulting $(h, c)$ are passed as the parameter values of `h0`/`c0`, and `F` rolls the LSTM forward symbolically over the prediction horizon from them.
+
+5. **Recovery.** `mpc.reset_lstm_state()` zeros the buffers and the solve counter, forcing a fresh re-warmup from the rolling context arrays — use it if you suspect the persisted state has drifted from the plant. The `state_context`/`action_context` arrays act as the recovery truth data, so keep updating them every step.
+
+In pseudocode:
+
+```
+on each solve_mpc(state_context, action_context, ...):
+    if solve_count < n_warmup:
+        (h, c) = estimate_numeric(u_ctx, y_ctx, seed=(h, c) or zeros)  # full window
+    else:
+        (h, c) = step_numeric(u_ctx[-1], y_ctx[-1], h, c)              # one step
+    solve NLP with parameters h0 = h, c0 = c
+    solve_count += 1
+```
+
+Setting this up takes three steps:
+
+```python
+from neuralmpcx.neural import CasadiLSTM
+
+model = CasadiLSTM(
+    n_context=10, n_inputs=1, hidden_size=128,
+    horizon=10, proj_size=1, input_order="y_then_u",
+)
+model.load_state_dict(torch.load("model.pt"))
+
+mpc.set_neural_dynamics(model=model, input_order="y_then_u", n_warmup=1)
+
+# mpc.is_warmed_up        -> True once n_warmup solves have run
+# mpc.reset_lstm_state()  -> force re-warmup from the context window
+```
 
 ## Project Structure
 

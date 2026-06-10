@@ -14,8 +14,9 @@ Overview
 We expose a single entry point:
 
 - :class:`neuralmpcx.neural.CasadiLSTM`: loads a PyTorch LSTM (optionally with a
-  projection head), converts it to CasADi symbolic functions, handles I/O reordering,
-  and runs estimate-then-predict forward passes for neural MPC.
+  projection head), converts it to a CasADi symbolic single-step function, handles
+  I/O reordering, and rolls the prediction horizon forward from the hidden/cell
+  states persisted by the MPC across solves (stateful neural MPC).
 
 Typical usage with neural MPC
 =============================
@@ -34,6 +35,7 @@ Typical usage with neural MPC
         input_order="y_then_u",
         output_bias=b,
         name="F_neural",
+        n_warmup=1,
     )
 
 API
