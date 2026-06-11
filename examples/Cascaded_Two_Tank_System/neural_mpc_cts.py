@@ -53,6 +53,7 @@ import gc  # Garbage Collector control
 import casadi as cs
 import gymnasium as gym
 import matplotlib.pyplot as plt
+from matplotlib.ticker import AutoMinorLocator
 import numpy as np
 import numpy.typing as npt
 import torch
@@ -635,31 +636,65 @@ if __name__ == "__main__":
     print(f"  System Response : {system_file}")
     print(f"  Benchmark Data  : {bench_file}")
 
-    fig, axs = plt.subplots(3, 1, constrained_layout=True, sharex=True)
-    fig.suptitle("System Response")
+    COLOR_REAL = "#000000"  # real plant state
+    COLOR_PRED = "#0072B2"  # one-step model prediction
+    COLOR_SP = "#009E73"    # setpoint
+
+    fig, axes = plt.subplots(2, 2, figsize=(7, 5.5), sharex=False)
+    fig.suptitle("System Response", fontsize=11, fontweight="bold")
     timesteps = np.arange(X.shape[0])
 
-    axs[0].plot(timesteps, X[:, 1], label="h2")
-    axs[0].plot(timesteps[1:], SP[:, 1], linestyle=":", label="SP h2")
-    axs[0].plot(timesteps[1:], X_pred[:], linestyle=":", label=r"$h2$ Pred.")
-    axs[1].plot(timesteps, X[:, 0], label="h1")
-    axs[1].plot(timesteps[1:], SP[:, 0], linestyle=":", label="SP h1")
-    axs[2].step(timesteps[1:], U, where="post", label="u")
-
     lb_states, ub_states = env.x_bnd
-    axs[0].axhline(lb_states[1, 0], linestyle="--")
-    axs[0].axhline(ub_states[1, 0], linestyle="--")
-    axs[1].axhline(lb_states[0, 0], linestyle="--")
-    axs[1].axhline(ub_states[0, 0], linestyle="--")
-    axs[2].axhline(env.action_space.low[0], linestyle="--")
-    axs[2].axhline(env.action_space.high[0], linestyle="--")
 
-    for ax, label in zip(axs, ("$h_2$ [m]", "$h_1$ [m]", "u [V]")):
-        ax.set_ylabel(label)
-        ax.legend(loc="best")
-        ax.grid(True, alpha=0.3)
+    ax_h2 = axes[0, 0]
+    ax_h2.plot(
+        timesteps, X[:, 1], color=COLOR_REAL, linestyle="-", linewidth=1.5, label="plant"
+    )
+    ax_h2.plot(
+        timesteps[1:], X_pred[:], color=COLOR_PRED, linestyle=":", linewidth=1.2,
+        label="pred.",
+    )
+    ax_h2.plot(
+        timesteps[1:], SP[:, 1], color=COLOR_SP, linestyle="--", linewidth=1.0,
+        label="setpoint",
+    )
+    ax_h2.axhline(lb_states[1, 0], color="grey", linestyle="--", linewidth=0.8, alpha=0.6)
+    ax_h2.axhline(ub_states[1, 0], color="grey", linestyle="--", linewidth=0.8, alpha=0.6)
+    ax_h2.set_title(r"$h_2$", fontsize=9)
+    ax_h2.set_ylabel(r"$h_2$ [m]")
 
-    axs[-1].set_xlabel("time step")
+    ax_h1 = axes[0, 1]
+    ax_h1.plot(
+        timesteps, X[:, 0], color=COLOR_REAL, linestyle="-", linewidth=1.5, label="plant"
+    )
+    ax_h1.plot(
+        timesteps[1:], SP[:, 0], color=COLOR_SP, linestyle="--", linewidth=1.0,
+        label="setpoint",
+    )
+    ax_h1.axhline(lb_states[0, 0], color="grey", linestyle="--", linewidth=0.8, alpha=0.6)
+    ax_h1.axhline(ub_states[0, 0], color="grey", linestyle="--", linewidth=0.8, alpha=0.6)
+    ax_h1.set_title(r"$h_1$", fontsize=9)
+    ax_h1.set_ylabel(r"$h_1$ [m]")
+
+    ax_u = axes[1, 0]
+    ax_u.step(timesteps[1:], U, where="post", color=COLOR_PRED, label=r"$u$")
+    ax_u.axhline(env.action_space.low[0], color="grey", linestyle="--", linewidth=0.8, alpha=0.6)
+    ax_u.axhline(env.action_space.high[0], color="grey", linestyle="--", linewidth=0.8, alpha=0.6)
+    ax_u.set_title(r"$u$ (input)", fontsize=9)
+    ax_u.set_ylabel("u [V]")
+
+    # Fourth panel unused (only three signals to show).
+    axes[1, 1].axis("off")
+
+    for ax in (ax_h2, ax_h1, ax_u):
+        ax.legend(loc="best", fontsize=7, framealpha=0.9)
+        ax.grid(True, which="major", alpha=0.3)
+        ax.xaxis.set_minor_locator(AutoMinorLocator())
+        ax.yaxis.set_minor_locator(AutoMinorLocator())
+        ax.set_xlabel("time step")
+
+    fig.tight_layout()
+    fig.subplots_adjust(top=0.90)
 
     exec_array = np.array(exec_times_ms)
     mean_time = np.mean(exec_array)
@@ -673,21 +708,30 @@ if __name__ == "__main__":
 
     fig_bench, ax_bench = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
     fig_bench.suptitle(
-        f"Benchmark Results (Mean: {mean_time:.2f}ms, P99: {p99_time:.2f}ms)"
+        f"Benchmark Results (Mean: {mean_time:.2f}ms, P99: {p99_time:.2f}ms)",
+        fontsize=11, fontweight="bold",
     )
 
-    ax_bench[0].plot(exec_array, label="Computation Time")
+    ax_bench[0].plot(exec_array, color=COLOR_PRED, linewidth=1.2, label="Computation Time")
     ax_bench[0].set_xlabel("Simulation Step")
     ax_bench[0].set_ylabel("Time (ms)")
-    ax_bench[0].set_title("Execution Time per Step")
-    ax_bench[0].grid(True, alpha=0.3)
+    ax_bench[0].set_title("Execution Time per Step", fontsize=9)
+    ax_bench[0].legend(loc="best", fontsize=7, framealpha=0.9)
+    ax_bench[0].grid(True, which="major", alpha=0.3)
+    ax_bench[0].xaxis.set_minor_locator(AutoMinorLocator())
+    ax_bench[0].yaxis.set_minor_locator(AutoMinorLocator())
 
-    ax_bench[1].hist(exec_array, bins=30, color="orange", alpha=0.7, edgecolor="black")
+    ax_bench[1].hist(
+        exec_array, bins=30, color="#D55E00", alpha=0.7, edgecolor="black"
+    )
     ax_bench[1].axvline(p99_time, color="red", linestyle="--", label="99th Percentile")
-    ax_bench[1].axvline(mean_time, color="blue", linestyle="--", label="Mean")
+    ax_bench[1].axvline(mean_time, color=COLOR_REAL, linestyle="--", label="Mean")
     ax_bench[1].set_xlabel("Time (ms)")
     ax_bench[1].set_ylabel("Frequency")
-    ax_bench[1].set_title("Latency Distribution")
-    ax_bench[1].legend()
+    ax_bench[1].set_title("Latency Distribution", fontsize=9)
+    ax_bench[1].legend(loc="best", fontsize=7, framealpha=0.9)
+    ax_bench[1].grid(True, which="major", alpha=0.3)
+    ax_bench[1].xaxis.set_minor_locator(AutoMinorLocator())
+    ax_bench[1].yaxis.set_minor_locator(AutoMinorLocator())
 
     plt.show()

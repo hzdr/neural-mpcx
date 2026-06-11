@@ -24,8 +24,11 @@ Classes
 -------
 KalmanFilter
     Standard discrete-time linear Kalman filter.
+ExtendedKalmanFilter
+    Discrete-time extended Kalman filter for nonlinear systems with
+    CasADi-derived Jacobians.
 AugmentedKalmanFilter
-    Extended Kalman filter for joint state and bias estimation.
+    Augmented linear Kalman filter for joint state and bias estimation.
 
 Examples
 --------
@@ -40,12 +43,13 @@ Examples
 >>> biases = kf.get_mpc_biases()
 """
 
-from typing import Optional
+from typing import Optional, Union
 
+import casadi as cs
 import numpy as np
 import numpy.typing as npt
 
-__all__ = ["KalmanFilter", "AugmentedKalmanFilter"]
+__all__ = ["KalmanFilter", "ExtendedKalmanFilter", "AugmentedKalmanFilter"]
 
 
 def _ensure_array(
@@ -339,6 +343,315 @@ class KalmanFilter:
         # Error covariance update
         I = np.eye(self._nx, dtype=np.float64)
         self._P = (I - K @ self._Cd) @ self._P
+
+    def reset(
+        self,
+        x0: Optional[npt.ArrayLike] = None,
+        P0: Optional[npt.ArrayLike] = None,
+    ) -> None:
+        """Reset filter state to initial conditions.
+
+        Parameters
+        ----------
+        x0 : array_like, optional
+            New initial state estimate. If None, resets to zeros.
+        P0 : array_like, optional
+            New initial covariance. If None, resets to identity.
+        """
+        if x0 is None:
+            self._x_est = np.zeros((self._nx, 1), dtype=np.float64)
+        else:
+            self._x_est = _ensure_column_vector(x0, self._nx, "x0")
+
+        if P0 is None:
+            self._P = np.eye(self._nx, dtype=np.float64)
+        else:
+            self._P = _ensure_array(P0, "P0")
+            if self._P.shape != (self._nx, self._nx):
+                raise ValueError(
+                    f"P0 must have shape ({self._nx}, {self._nx}), got {self._P.shape}"
+                )
+
+
+class ExtendedKalmanFilter:
+    """Discrete-time extended Kalman filter (EKF) for nonlinear systems.
+
+    Estimates the state x of a nonlinear plant from noisy measurements y and
+    control inputs u using the standard EKF predict-update recursion. The
+    nonlinear dynamics are provided as a CasADi function, and the Jacobians
+    required for the covariance propagation are derived automatically via
+    CasADi algorithmic differentiation (no finite differences).
+
+    System model::
+
+        x[k+1] = f(x[k], u[k]) + w[k]    (process)
+        y[k]   = h(x[k]) + v[k]          (measurement)
+
+    where w ~ N(0, Q) and v ~ N(0, R).
+
+    Parameters
+    ----------
+    f : casadi.Function
+        Discrete-time state transition map with signature ``f(x, u) -> x_next``,
+        where ``x`` is the state column vector (nx, 1) and ``u`` the input
+        column vector (nu, 1). If the function has multiple outputs, the next
+        state is assumed to be the first one (same convention as
+        ``Mpc.set_dynamics``), so the dynamics registered on an ``Mpc``
+        instance (``mpc.dynamics``) can be passed directly.
+    h : casadi.Function or array_like
+        Measurement map. Either a CasADi function with signature
+        ``h(x) -> y``, or a measurement matrix ``C`` of shape (ny, nx) for the
+        common linear-measurement case ``y = C @ x``.
+    Q : array_like, shape (nx, nx), optional
+        Process noise covariance matrix. Default is 0.1 * I.
+    R : array_like, shape (ny, ny), optional
+        Measurement noise covariance matrix. Default is 1.0 * I.
+    x0 : array_like, shape (nx,) or (nx, 1), optional
+        Initial state estimate. Default is zero vector.
+    P0 : array_like, shape (nx, nx), optional
+        Initial error covariance. Default is identity matrix.
+
+    Attributes
+    ----------
+    nx : int
+        State dimension.
+    nu : int
+        Input dimension.
+    ny : int
+        Output dimension.
+
+    Examples
+    --------
+    >>> import casadi as cs
+    >>> import numpy as np
+    >>> x = cs.MX.sym("x", 2)
+    >>> u = cs.MX.sym("u", 1)
+    >>> dt = 0.1
+    >>> x_next = x + dt * cs.vertcat(x[1], -cs.sin(x[0]) + u)
+    >>> f = cs.Function("f", [x, u], [x_next])
+    >>> C = np.array([[1.0, 0.0]])  # only the first state is measured
+    >>> ekf = ExtendedKalmanFilter(f, C, Q=np.eye(2) * 0.01, R=np.eye(1) * 0.1)
+    >>> ekf.predict(u=np.array([[0.5]]))
+    >>> ekf.update(y=np.array([[0.2]]))
+    >>> print(ekf.x_est.flatten())
+
+    Notes
+    -----
+    The state and measurement dimensions are inferred from ``f`` and ``h``.
+    Jacobians are evaluated numerically at the current estimate at each
+    ``predict``/``update`` call.
+    """
+
+    def __init__(
+        self,
+        f: cs.Function,
+        h: Union[cs.Function, npt.ArrayLike],
+        Q: Optional[npt.ArrayLike] = None,
+        R: Optional[npt.ArrayLike] = None,
+        x0: Optional[npt.ArrayLike] = None,
+        P0: Optional[npt.ArrayLike] = None,
+    ) -> None:
+        # Validate the state transition function
+        if not isinstance(f, cs.Function):
+            raise TypeError(f"f must be a casadi.Function, got {type(f).__name__}")
+        if f.n_in() != 2:
+            raise ValueError(f"f must take exactly 2 inputs (x, u), got {f.n_in()}")
+        if f.size2_in(0) != 1 or f.size2_in(1) != 1:
+            raise ValueError(
+                "f inputs must be column vectors, got shapes "
+                f"{f.size_in(0)} and {f.size_in(1)}"
+            )
+
+        self._nx = int(f.size1_in(0))
+        self._nu = int(f.size1_in(1))
+
+        if f.size1_out(0) != self._nx:
+            raise ValueError(
+                f"first output of f must have {self._nx} rows to match the "
+                f"state, got {f.size1_out(0)}"
+            )
+
+        # Rewrap f with fresh symbols so that multi-output functions are
+        # normalized (x_next is the first output) and build the Jacobian
+        # dF/dx via CasADi algorithmic differentiation.
+        x_sym = cs.MX.sym("x", self._nx)
+        u_sym = cs.MX.sym("u", self._nu)
+        x_next = f(x_sym, u_sym)
+        if isinstance(x_next, (list, tuple)):
+            x_next = x_next[0]
+        self._f = cs.Function("ekf_f", [x_sym, u_sym], [x_next])
+        self._F_jac = cs.Function(
+            "ekf_F_jac", [x_sym, u_sym], [cs.jacobian(x_next, x_sym)]
+        )
+
+        # Process the measurement map: CasADi function or linear matrix C
+        if isinstance(h, cs.Function):
+            if h.n_in() != 1:
+                raise ValueError(
+                    f"h must take exactly 1 input (x), got {h.n_in()}"
+                )
+            if h.size2_in(0) != 1:
+                raise ValueError(
+                    f"h input must be a column vector, got shape {h.size_in(0)}"
+                )
+            if h.size1_in(0) != self._nx:
+                raise ValueError(
+                    f"h input must have {self._nx} rows to match f, "
+                    f"got {h.size1_in(0)}"
+                )
+            self._ny = int(h.size1_out(0))
+            y_expr = h(x_sym)
+            if isinstance(y_expr, (list, tuple)):
+                y_expr = y_expr[0]
+        else:
+            C = _ensure_array(h, "h")
+            if C.ndim != 2:
+                raise ValueError(f"h must be a 2D matrix, got {C.ndim} dimensions")
+            if C.shape[1] != self._nx:
+                raise ValueError(
+                    f"h must have {self._nx} columns to match f, got {C.shape[1]}"
+                )
+            self._ny = int(C.shape[0])
+            y_expr = cs.mtimes(cs.DM(C), x_sym)
+        self._h = cs.Function("ekf_h", [x_sym], [y_expr])
+        self._H_jac = cs.Function("ekf_H_jac", [x_sym], [cs.jacobian(y_expr, x_sym)])
+
+        # Process noise covariance
+        if Q is None:
+            self._Q = np.eye(self._nx, dtype=np.float64) * 0.1
+        else:
+            self._Q = _ensure_array(Q, "Q")
+            if self._Q.shape != (self._nx, self._nx):
+                raise ValueError(
+                    f"Q must have shape ({self._nx}, {self._nx}), got {self._Q.shape}"
+                )
+
+        # Measurement noise covariance
+        if R is None:
+            self._R = np.eye(self._ny, dtype=np.float64) * 1.0
+        else:
+            self._R = _ensure_array(R, "R")
+            if self._R.shape != (self._ny, self._ny):
+                raise ValueError(
+                    f"R must have shape ({self._ny}, {self._ny}), got {self._R.shape}"
+                )
+
+        # Initialize state estimate
+        self._x_est: npt.NDArray[np.floating]
+        if x0 is None:
+            self._x_est = np.zeros((self._nx, 1), dtype=np.float64)
+        else:
+            self._x_est = _ensure_column_vector(x0, self._nx, "x0")
+
+        # Initialize error covariance
+        if P0 is None:
+            self._P = np.eye(self._nx, dtype=np.float64)
+        else:
+            self._P = _ensure_array(P0, "P0")
+            if self._P.shape != (self._nx, self._nx):
+                raise ValueError(
+                    f"P0 must have shape ({self._nx}, {self._nx}), got {self._P.shape}"
+                )
+
+    @property
+    def nx(self) -> int:
+        """State dimension."""
+        return self._nx
+
+    @property
+    def nu(self) -> int:
+        """Input dimension."""
+        return self._nu
+
+    @property
+    def ny(self) -> int:
+        """Output dimension."""
+        return self._ny
+
+    @property
+    def x_est(self) -> npt.NDArray[np.floating]:
+        """Current state estimate, shape (nx, 1)."""
+        return self._x_est.copy()
+
+    @property
+    def P(self) -> npt.NDArray[np.floating]:
+        """Current error covariance, shape (nx, nx)."""
+        return self._P.copy()
+
+    def predict(self, u: npt.ArrayLike) -> None:
+        """Time update (prediction step).
+
+        Propagates state estimate and covariance forward one time step using
+        the nonlinear dynamics and their Jacobian linearization.
+
+        Parameters
+        ----------
+        u : array_like, shape (nu,) or (nu, 1)
+            Control input applied at the current time step.
+
+        Notes
+        -----
+        Updates::
+
+            F_k    = df/dx evaluated at (x_est, u)
+            x_pred = f(x_est, u)
+            P_pred = F_k @ P @ F_k.T + Q
+        """
+        u_vec = _ensure_column_vector(u, self._nu, "u")
+
+        # Jacobian must be evaluated at the prior estimate
+        F_k = self._F_jac(self._x_est, u_vec).full()
+
+        # State prediction
+        self._x_est = self._f(self._x_est, u_vec).full()
+
+        # Covariance prediction
+        self._P = F_k @ self._P @ F_k.T + self._Q
+
+    def update(self, y: npt.ArrayLike, u: Optional[npt.ArrayLike] = None) -> None:
+        """Measurement update (correction step).
+
+        Corrects the predicted state using the measurement.
+
+        Parameters
+        ----------
+        y : array_like, shape (ny,) or (ny, 1)
+            Measured output.
+        u : array_like, shape (nu,) or (nu, 1), optional
+            Unused; kept for API symmetry with ``KalmanFilter.update``. The
+            EKF measurement model ``h(x)`` has no feedthrough.
+
+        Notes
+        -----
+        Updates::
+
+            H_k    = dh/dx evaluated at x_pred
+            y_pred = h(x_pred)
+            K = P_pred @ H_k.T @ inv(H_k @ P_pred @ H_k.T + R)
+            x_est = x_pred + K @ (y - y_pred)
+            P = (I - K @ H_k) @ P_pred
+        """
+        y_vec = _ensure_column_vector(y, self._ny, "y")
+
+        # Measurement Jacobian and predicted measurement at current estimate
+        H_k = self._H_jac(self._x_est).full()
+        y_pred = self._h(self._x_est).full()
+
+        # Measurement residual (innovation)
+        y_res = y_vec - y_pred
+
+        # Innovation covariance
+        S = H_k @ self._P @ H_k.T + self._R
+
+        # Kalman gain
+        K = self._P @ H_k.T @ np.linalg.inv(S)
+
+        # State estimate update
+        self._x_est = self._x_est + K @ y_res
+
+        # Error covariance update
+        I = np.eye(self._nx, dtype=np.float64)
+        self._P = (I - K @ H_k) @ self._P
 
     def reset(
         self,

@@ -3,7 +3,7 @@
   "@type": "SoftwareSourceCode",
   "name": "NeuralMPCX",
   "description": "Model Predictive Control toolkit with neural MPC support (CasADi-friendly).",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "license": "https://spdx.org/licenses/Apache-2.0",
   "identifier": "https://doi.org/10.14278/rodare.4706",
   "codeRepository": "https://github.com/hzdr/neural-mpcx",
@@ -12,7 +12,7 @@
   "operatingSystem": ["Linux", "Windows", "macOS"],
   "runtimePlatform": "Python >= 3.9",
   "dateCreated": "2026-03-20",
-  "datePublished": "2026-06-10",
+  "datePublished": "2026-06-11",
   "author": [
     {
       "@type": "Person",

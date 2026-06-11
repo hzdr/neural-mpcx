@@ -9,7 +9,7 @@
 # Copyright (c) 2024 Filippo Airaldi, licensed under the MIT License.
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Dict, List, Literal, Optional, Tuple, TypeVar
 
 import numpy as np
@@ -294,8 +294,17 @@ def _assemble_mimo_ss(
     npt.NDArray[np.floating],
     npt.NDArray[np.floating],
     npt.NDArray[np.floating],
+    int,
 ]:
     """Assemble continuous MIMO state-space from transfer function terms.
+
+    Terms with ``has_integrator=True`` share a single integrator state per
+    output row: the stable part of each such term feeds an auxiliary signal
+    w_i, and one appended state integrates it (x_int_i' = w_i, y_i += x_int_i).
+    Realizing each channel with its own integrator would create multiple
+    eigenvalues at the origin observable only through their sum — structurally
+    undetectable difference modes that break any Riccati-based design (LQR
+    terminal costs, steady-state Kalman filters).
 
     Parameters
     ----------
@@ -310,28 +319,44 @@ def _assemble_mimo_ss(
 
     Returns
     -------
-    tuple of (A, B, C, D)
-        Continuous-time state-space matrices.
+    tuple of (A, B, C, D, n_int)
+        Continuous-time state-space matrices; the last ``n_int`` states are
+        the shared integrator states appended after the stable blocks.
     """
+    # Output rows containing integrator terms each get one shared integrator
+    int_rows = sorted(
+        {i for (i, _), terms in G.items() for t in terms if t.has_integrator}
+    )
+    aux_of_row = {i: k for k, i in enumerate(int_rows)}
+    n_int = len(int_rows)
+
     A_blocks: List[npt.NDArray] = []
     B_blocks: List[npt.NDArray] = []
-    C_blocks: List[npt.NDArray] = []
+    C_blocks: List[npt.NDArray] = []  # direct contributions to the outputs
+    W_blocks: List[npt.NDArray] = []  # contributions to the shared integrators
     D_accum = np.zeros((ny, nu), dtype=float)
+    D_w = np.zeros((n_int, nu), dtype=float)
 
     # Process each (i, j) entry
     for (i, j), terms in G.items():
         for term in terms:
-            # Convert term to transfer function polynomials
-            num, den = _term_to_tf(term, pade_order)
+            # Convert the stable part to transfer function polynomials;
+            # the integrator (if any) is factored out and shared per row
+            num, den = _term_to_tf(replace(term, has_integrator=False), pade_order)
+
+            if len(den) == 1:
+                # Static gain: scipy.signal.tf2ss would pad this to a spurious
+                # 1-state realization with a pole at the origin
+                k_gain = float(num[0]) / float(den[0])
+                if term.has_integrator:
+                    D_w[aux_of_row[i], j] += k_gain
+                else:
+                    D_accum[i, j] += k_gain
+                continue
 
             # Convert SISO TF to state-space
             A_ij, B_ij, C_ij, D_ij = tf2ss(num, den)
-
             n_states = A_ij.shape[0]
-            if n_states == 0:
-                # Direct feedthrough only (no dynamics)
-                D_accum[i, j] += float(np.squeeze(D_ij))
-                continue
 
             A_blocks.append(A_ij)
 
@@ -340,39 +365,56 @@ def _assemble_mimo_ss(
             B_global_block[:, j : j + 1] = B_ij
             B_blocks.append(B_global_block)
 
-            # C_global: output i receives C_ij, others zero
+            # Route the block output either directly to output i or into the
+            # row's shared integrator
             C_global_block = np.zeros((ny, n_states), dtype=float)
-            C_global_block[i : i + 1, :] = C_ij
+            W_global_block = np.zeros((n_int, n_states), dtype=float)
+            if term.has_integrator:
+                W_global_block[aux_of_row[i] : aux_of_row[i] + 1, :] = C_ij
+                D_w[aux_of_row[i], j] += float(np.squeeze(D_ij))
+            else:
+                C_global_block[i : i + 1, :] = C_ij
+                D_accum[i, j] += float(np.squeeze(D_ij))
             C_blocks.append(C_global_block)
+            W_blocks.append(W_global_block)
 
-            # Accumulate D
-            D_accum[i, j] += float(np.squeeze(D_ij))
+    n_stable = sum(A_k.shape[0] for A_k in A_blocks)
+    n_total = n_stable + n_int
 
-    if not A_blocks:
+    if n_total == 0:
         # No dynamics, only feedthrough
         return (
             np.zeros((0, 0), dtype=float),
             np.zeros((0, nu), dtype=float),
             np.zeros((ny, 0), dtype=float),
             D_accum,
+            0,
         )
 
-    # Assemble block-diagonal A
-    sizes = [A.shape[0] for A in A_blocks]
-    total_states = sum(sizes)
-
-    A_cont = np.zeros((total_states, total_states), dtype=float)
+    # Assemble block-diagonal A for the stable blocks
+    A_cont = np.zeros((n_total, n_total), dtype=float)
     offset = 0
-    for k, A_k in enumerate(A_blocks):
-        n = sizes[k]
+    for A_k in A_blocks:
+        n = A_k.shape[0]
         A_cont[offset : offset + n, offset : offset + n] = A_k
         offset += n
 
-    # Stack B and C blocks
-    B_cont = np.vstack(B_blocks)
-    C_cont = np.hstack(C_blocks)
+    B_cont = np.zeros((n_total, nu), dtype=float)
+    C_cont = np.zeros((ny, n_total), dtype=float)
+    if n_stable > 0:
+        B_cont[:n_stable, :] = np.vstack(B_blocks)
+        C_cont[:, :n_stable] = np.hstack(C_blocks)
 
-    return A_cont, B_cont, C_cont, D_accum
+    # Append the shared integrator states:
+    # x_int_i' = w_i = W x_stable + D_w u,  y_i += x_int_i
+    if n_int > 0:
+        if n_stable > 0:
+            A_cont[n_stable:, :n_stable] = np.hstack(W_blocks)
+        B_cont[n_stable:, :] = D_w
+        for i, k in aux_of_row.items():
+            C_cont[i, n_stable + k] = 1.0
+
+    return A_cont, B_cont, C_cont, D_accum, n_int
 
 
 def _balanced_realization(
@@ -470,19 +512,28 @@ def mimo_tf2ss(
     store_continuous : bool, optional
         If True, also stores continuous-time matrices in result. Default True.
     balanced : bool, optional
-        If True (default), applies a balanced realization to the assembled
-        continuous-time state-space before discretization.  The similarity
-        transformation equalises the controllability and observability
-        Gramians, giving the best-conditioned numerically equivalent
-        representation.  Requires all eigenvalues of A to be strictly in the
-        open left-half plane (Hurwitz).  A ``UserWarning`` is emitted and the
-        unbalanced (controllable canonical) form is kept when the system
-        contains integrators or other marginally stable/unstable modes.
+        If True (default), applies a balanced realization to the stable part
+        of the assembled continuous-time state-space before discretization.
+        The similarity transformation equalises the controllability and
+        observability Gramians, giving the best-conditioned numerically
+        equivalent representation.  Shared integrator states (see Notes) are
+        left untouched.  A ``UserWarning`` is emitted and the unbalanced
+        (controllable canonical) form is kept when the stable part contains
+        other marginally stable or unstable modes.
 
     Returns
     -------
     DiscreteStateSpace
         Dataclass containing Ad, Bd, Cd, Dd matrices and metadata.
+
+    Notes
+    -----
+    Terms with ``has_integrator=True`` share a single integrator state per
+    output row (the stable parts are summed and integrated once).  This is
+    input-output equivalent to per-channel integrators but avoids multiple
+    origin poles that are observable only through their sum — such jointly
+    unobservable modes make Riccati-based designs (LQR terminal costs,
+    steady-state Kalman filters) infeasible.
 
     Examples
     --------
@@ -501,16 +552,23 @@ def mimo_tf2ss(
     """
     import warnings
 
-    # Assemble continuous MIMO state-space
-    A_cont, B_cont, C_cont, D_cont = _assemble_mimo_ss(G, ny, nu, pade_order)
+    # Assemble continuous MIMO state-space; the last n_int states are the
+    # shared integrators appended after the stable blocks
+    A_cont, B_cont, C_cont, D_cont, n_int = _assemble_mimo_ss(G, ny, nu, pade_order)
 
-    # Apply balanced realization (similarity transform for best conditioning)
-    if balanced and A_cont.size > 0:
-        eigs = np.linalg.eigvals(A_cont)
+    # Apply balanced realization to the stable subsystem (the integrator
+    # states are excluded: Gramians only exist for Hurwitz dynamics, and the
+    # integrator states are already perfectly conditioned)
+    ns = A_cont.shape[0] - n_int
+    if balanced and ns > 0:
+        eigs = np.linalg.eigvals(A_cont[:ns, :ns])
         if np.all(eigs.real < 0):
+            # The integrator couplings read the stable states too, so they
+            # must enter the observability Gramian alongside the true outputs
+            C_stack = np.vstack([C_cont[:, :ns], A_cont[ns:, :ns]])
             try:
-                A_cont, B_cont, C_cont = _balanced_realization(
-                    A_cont, B_cont, C_cont
+                A_s, B_s, C_stack = _balanced_realization(
+                    A_cont[:ns, :ns], B_cont[:ns, :], C_stack
                 )
             except np.linalg.LinAlgError:
                 warnings.warn(
@@ -519,11 +577,16 @@ def mimo_tf2ss(
                     UserWarning,
                     stacklevel=2,
                 )
+            else:
+                A_cont[:ns, :ns] = A_s
+                A_cont[ns:, :ns] = C_stack[ny:, :]
+                B_cont[:ns, :] = B_s
+                C_cont[:, :ns] = C_stack[:ny, :]
         else:
             warnings.warn(
-                "System has marginally stable or unstable modes (e.g., integrators). "
-                "Balanced realization requires a Hurwitz A matrix; "
-                "using controllable canonical form.",
+                "System has marginally stable or unstable modes besides the "
+                "shared integrators. Balanced realization requires a Hurwitz "
+                "A matrix; using controllable canonical form.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -604,7 +667,17 @@ def dlqr(
         Atilde = A
         Qtilde = Q
         M = np.zeros(B.shape)
-    P = solve_discrete_are(Atilde, B, Qtilde, R)
+    try:
+        P = solve_discrete_are(Atilde, B, Qtilde, R)
+    except (np.linalg.LinAlgError, ValueError) as err:
+        raise np.linalg.LinAlgError(
+            f"Discrete-time algebraic Riccati equation failed: {err} "
+            "A stabilizing solution exists only if every unstable or "
+            "unit-circle mode of A is stabilizable through B and detectable "
+            "through Q. A common pitfall is several integrator channels "
+            "measured only through their sum: the difference modes are "
+            "jointly unobservable."
+        ) from err
     K = np.linalg.solve(B.T.dot(P).dot(B) + R, B.T.dot(P).dot(A) + M.T)
     return K, P
 

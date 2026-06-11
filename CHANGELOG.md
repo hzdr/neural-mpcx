@@ -5,6 +5,23 @@ All notable changes to NeuralMPCX will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.1.0] - 2026-06-11
+
+### Added
+
+- Feature: discrete-time Extended Kalman Filter (EKF) for nonlinear systems to neuralmpcx.util.estimators.
+- `control.py`: Implemented shared integrator per output row in `_assemble_mimo_ss`. Balance stable subsystem when integrators are present.
+
+### Changed
+
+- Refactored `nmpc_cstr.py` example. With `USE_EKF` enabled, an Extended Kalman Filter reconstructs the full state from the noisy temperature measurements and the MPC consumes the estimate.
+
+- Refactored all examples plots layout to be better presented.
+
+### Fixed
+
+- `control.py`: Fixed pure-gain spurious state in `_assemble_mimo_sse`
+
 ## [2.0.0] - 2026-06-10
 
 ### Added

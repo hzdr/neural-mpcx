@@ -45,6 +45,7 @@ import gc  # Garbage Collector control
 import casadi as cs
 import gymnasium as gym
 import matplotlib.pyplot as plt
+from matplotlib.ticker import AutoMinorLocator
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -52,6 +53,7 @@ from gymnasium.spaces import Box
 import sys
 
 from neuralmpcx import Nlp
+from neuralmpcx.util.estimators import ExtendedKalmanFilter
 from neuralmpcx.wrappers import Mpc
 
 # -----------------------------------------------------------------------------
@@ -64,6 +66,16 @@ HORIZON = 10
 WARMUP_TYPE = "X0" # "ZEROS" OR "X0"
 NUM_ITER = 1000
 EXPERIMENT_ID = "experiment_3.1"
+
+# State estimation: in a real CSTR only the reactor and jacket temperatures
+# (T_R, T_K) are measured online via thermocouples; the concentrations
+# (C_A, C_B) require lab analysis and are not available to the controller.
+# With USE_EKF enabled, an Extended Kalman Filter reconstructs the full state
+# from the noisy temperature measurements and the MPC consumes the estimate.
+USE_EKF = True
+USE_MEAS_NOISE = True
+TEMP_NOISE_STD = 0.5  # Gaussian noise std dev on measured T_R, T_K [degC]
+MEAS_INDICES = [2, 3]  # indices of the measured states (T_R, T_K)
 
 # -----------------------------------------------------------------------------
 # Normalization Parameters
@@ -168,6 +180,7 @@ class CSTRSystem(gym.Env):
     )
     nx = 4
     nu = 2
+    use_meas_noise = USE_MEAS_NOISE
 
     def __init__(self, dt_hr=0.005):
         """Initialize CSTR system with physical parameters and steady state.
@@ -379,6 +392,33 @@ class CSTRSystem(gym.Env):
         self.x[3] = np.clip(self.x[3], 0, 200)
 
         return self._normalize_state(self.x.copy()), 0.0, False, False, {}
+
+    def measure(self):
+        """Return the online plant measurements: normalized [T_R, T_K].
+
+        In a real CSTR only the reactor and jacket temperatures are measured
+        online via thermocouples; the concentrations C_A and C_B require lab
+        analysis and are not available to the controller. Gaussian measurement
+        noise is added when the module-level USE_MEAS_NOISE flag is set.
+
+        Returns
+        -------
+        np.ndarray
+            Normalized temperature measurements [T_R, T_K], shape (2, 1).
+        """
+        y_phys = self.x[MEAS_INDICES].copy()
+        if self.use_meas_noise:
+            y_phys = y_phys + self.np_random.normal(
+                0.0, TEMP_NOISE_STD, size=(len(MEAS_INDICES), 1)
+            )
+            y_phys = np.clip(y_phys, 0.0, 200.0)
+
+        y_norm = np.zeros_like(y_phys)
+        for i, key in enumerate(["T_R", "T_K"]):
+            p_min = Y_NORM_PARAMS[key]["min"]
+            p_max = Y_NORM_PARAMS[key]["max"]
+            y_norm[i] = (y_phys[i] - p_min) / (p_max - p_min)
+        return y_norm
 
 
 class NMPC(Mpc[cs.MX]):
@@ -762,6 +802,33 @@ if __name__ == "__main__":
     mpc = NMPC()
     env = CSTRSystem()
 
+    ekf = None
+    if USE_EKF:
+        # Only temperatures are measured online: y = C_meas @ x
+        C_meas = np.array(
+            [[0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]], dtype=np.float64
+        )
+        # Measurement noise variance in normalized units (R floored when the
+        # injected noise is disabled to keep the filter well-conditioned)
+        meas_std_norm = TEMP_NOISE_STD / (
+            Y_NORM_PARAMS["T_R"]["max"] - Y_NORM_PARAMS["T_R"]["min"]
+        )
+        R_meas = np.eye(2) * (meas_std_norm**2 if USE_MEAS_NOISE else 1e-8)
+        # Initial concentration estimates are deliberately wrong (true x0 is
+        # [0.2, 0.5, 120, 120]) to show the EKF reconstructing the unmeasured
+        # states from the temperature measurements
+        x0_est_norm = normalize_vector(
+            np.asarray([0.8, 0.2, 120.0, 120.0], dtype=np.float64)
+        )
+        ekf = ExtendedKalmanFilter(
+            f=mpc.dynamics,  # the exact F_model registered in the NLP
+            h=C_meas,
+            Q=np.diag([1e-6, 1e-6, 1e-5, 1e-5]),
+            R=R_meas,
+            x0=x0_est_norm,
+            P0=np.diag([5e-2, 5e-2, 1e-3, 1e-3]),
+        )
+
     setpoint_values = [[[1.5], [1.0], [100.0], [100.0]]]
     setpoint_timestamps = [0]
 
@@ -770,9 +837,17 @@ if __name__ == "__main__":
     rng = np.random.default_rng(69)
     state, _ = env.reset(seed=mk_seed(rng), options=None)
 
+    # The controller feedback is the EKF estimate when enabled, otherwise the
+    # true plant state (idealized full-state feedback)
+    state_fb = ekf.x_est if USE_EKF else state
+
     X, U, SP, X_pred = [state], [], [], []
+    X_est = [ekf.x_est.flatten()] if USE_EKF else []
+    Y_MEAS = []
     if WARMUP_TYPE == "X0":
-        state_context = np.tile(state.T, (mpc.n_context, 1))
+        state_context = np.tile(
+            np.asarray(state_fb).reshape(1, -1), (mpc.n_context, 1)
+        )
     else:
         state_context = np.zeros((mpc.n_context, CSTRSystem.nx))
     action_context = np.zeros((mpc.n_context, CSTRSystem.nu))
@@ -796,7 +871,7 @@ if __name__ == "__main__":
 
                 t0 = time.perf_counter()
                 u_opt = mpc.solve_mpc(
-                    state,
+                    state_fb,
                     state_context,
                     state_indices,
                     action_context,
@@ -810,7 +885,20 @@ if __name__ == "__main__":
                 exec_times_ms.append((t1 - t0) * 1000.0)
                 obs, _, _, _, _ = env.step(np.asarray(u_opt))
                 state = obs
-                state_context = np.vstack([state_context, obs.T])[-mpc.n_context :]
+
+                if USE_EKF:
+                    y_meas = env.measure()
+                    ekf.predict(u=u_opt)
+                    ekf.update(y=y_meas)
+                    state_fb = ekf.x_est
+                    X_est.append(ekf.x_est.flatten())
+                    Y_MEAS.append(np.asarray(y_meas).flatten())
+                else:
+                    state_fb = obs
+
+                state_context = np.vstack(
+                    [state_context, np.asarray(state_fb).reshape(1, -1)]
+                )[-mpc.n_context :]
                 action_context = np.vstack([action_context, np.asarray(u_opt).T])[
                     -mpc.n_context :
                 ]
@@ -838,6 +926,9 @@ if __name__ == "__main__":
     X_pred = np.squeeze(np.array(X_pred))
     U = np.squeeze(np.array(U))
     SP = np.squeeze(np.array(SP))
+    if USE_EKF:
+        X_est = np.asarray(X_est)  # (N+1, 4), aligned with X
+        Y_MEAS = np.asarray(Y_MEAS)  # (N, 2)
 
     import pandas as pd
 
@@ -858,12 +949,20 @@ if __name__ == "__main__":
             "T_K_pred": X_pred[:, 3],
             "F": U[:, 0],
             "Q_dot": U[:, 1],
-            "sp_C_A": SP[:, 0],
-            "sp_C_B": SP[:, 1],
-            "sp_T_R": SP[:, 2],
-            "sp_T_K": SP[:, 3],
+            "C_A_sp": SP[:, 0],
+            "C_B_sp": SP[:, 1],
+            "T_R_sp": SP[:, 2],
+            "T_K_sp": SP[:, 3],
         }
     )
+
+    if USE_EKF:
+        df_system["C_A_est"] = X_est[1:, 0]
+        df_system["C_B_est"] = X_est[1:, 1]
+        df_system["T_R_est"] = X_est[1:, 2]
+        df_system["T_K_est"] = X_est[1:, 3]
+        df_system["T_R_meas"] = Y_MEAS[:, 0]
+        df_system["T_K_meas"] = Y_MEAS[:, 1]
 
     df_benchmark = pd.DataFrame(
         {"step": np.arange(len(exec_times_ms)), "exec_time_ms": exec_times_ms}
@@ -885,58 +984,100 @@ if __name__ == "__main__":
         X[:, i] = X[:, i] * (p_max - p_min) + p_min
         X_pred[:, i] = X_pred[:, i] * (p_max - p_min) + p_min
         SP[:, i] = SP[:, i] * (p_max - p_min) + p_min
+        if USE_EKF:
+            X_est[:, i] = X_est[:, i] * (p_max - p_min) + p_min
+
+    if USE_EKF:
+        for j, key in enumerate(["T_R", "T_K"]):
+            p_min, p_max = Y_NORM_PARAMS[key]["min"], Y_NORM_PARAMS[key]["max"]
+            Y_MEAS[:, j] = Y_MEAS[:, j] * (p_max - p_min) + p_min
 
     u_keys = ["F", "Q_dot"]
     for i, key in enumerate(u_keys):
         p_min, p_max = U_NORM_PARAMS[key]["min"], U_NORM_PARAMS[key]["max"]
         U[:, i] = U[:, i] * (p_max - p_min) + p_min
 
-    fig, axs = plt.subplots(6, 1, constrained_layout=True, sharex=True)
-    fig.suptitle("System Response")
+    COLOR_REAL = "#000000"  # real plant state
+    COLOR_PRED = "#0072B2"  # one-step model prediction
+    COLOR_SP = "#009E73"    # setpoint
+    COLOR_EST = "#D55E00"   # EKF estimate
+    COLOR_MEAS = "#56B4E9"  # noisy online measurement
+
+    fig, axes = plt.subplots(3, 2, figsize=(7, 8.25), sharex=True)
+    fig.suptitle("System Response", fontsize=11, fontweight="bold")
     timesteps = np.arange(stop=X.shape[0] * 0.005, step=0.005)
 
-    axs[0].plot(timesteps, X[:, 1], label=r"$C_B$")
-    axs[0].plot(timesteps[1:], SP[:, 1], linestyle=":", label=r"SP $C_B$")
-    axs[0].plot(timesteps[1:], X_pred[:, 1], linestyle=":", label=r"$C_B$ Pred.")
-    axs[1].plot(timesteps, X[:, 0], label=r"$C_A$")
-    axs[1].plot(timesteps[1:], SP[:, 0], linestyle=":", label=r"SP $C_A$")
-    axs[1].plot(timesteps[1:], X_pred[:, 0], linestyle=":", label=r"$C_A$ Pred.")
-    axs[2].plot(timesteps, X[:, 2], label=r"$T_R$")
-    axs[2].plot(timesteps[1:], SP[:, 2], linestyle=":", label=r"SP $T_R$")
-    axs[2].plot(timesteps[1:], X_pred[:, 2], linestyle=":", label=r"$T_R$ Pred.")
-    axs[3].plot(timesteps, X[:, 3], label=r"$T_K$")
-    axs[3].plot(timesteps[1:], SP[:, 3], linestyle=":", label=r"SP $T_K$")
-    axs[3].plot(timesteps[1:], X_pred[:, 3], linestyle=":", label=r"$T_K$ Pred.")
-    axs[4].step(timesteps[1:], U[:, 0], where="post", label=r"$F$")
-    axs[5].step(timesteps[1:], U[:, 1], where="post", label=r"$\dot{Q}$")
-
-    lb_states = [0.1, 0.1, 50.0, 50.0]
+    lb_states = [0.1, 0.1, 115.0, 115.0]
     ub_states = [2.0, 2.0, 135.0, 140.0]
-    axs[0].axhline(lb_states[1], linestyle="--")
-    axs[0].axhline(ub_states[1], linestyle="--")
-    axs[1].axhline(lb_states[0], linestyle="--")
-    axs[1].axhline(ub_states[0], linestyle="--")
-    axs[2].axhline(lb_states[2], linestyle="--")
-    axs[2].axhline(ub_states[2], linestyle="--")
-    axs[3].axhline(lb_states[3], linestyle="--")
-    axs[3].axhline(ub_states[3], linestyle="--")
+    state_labels = [r"$C_A$", r"$C_B$", r"$T_R$", r"$T_K$"]
+    state_units = ["mol/L", "mol/L", r"$^\circ$C", r"$^\circ$C"]
 
-    for ax, label in zip(
-        axs,
-        (
-            r"$C_B$ [mol/L]",
-            r"$C_A$ [mol/L]",
-            r"$T_R$ [$^\circ$C]",
-            r"$T_K$ [$^\circ$C]",
-            r"$F$[$h^{-1}$]",
-            r"$\dot{Q}$[kJ/h]",
-        ),
-    ):
-        ax.set_ylabel(label)
-        ax.legend(loc="best")
-        ax.grid(True, alpha=0.3)
+    # (subplot position, state index, online measurement column or None)
+    state_plots = [
+        ((0, 0), 1, None),  # C_B (unmeasured)
+        ((0, 1), 0, None),  # C_A (unmeasured)
+        ((1, 0), 2, 0),     # T_R (measured)
+        ((1, 1), 3, 1),     # T_K (measured)
+    ]
 
-    axs[-1].set_xlabel("time [h]")
+    for (row, col), s_i, meas_col in state_plots:
+        ax = axes[row, col]
+        lbl = state_labels[s_i]
+
+        if USE_EKF and meas_col is not None:
+            ax.plot(
+                timesteps[1:], Y_MEAS[:, meas_col],
+                color=COLOR_MEAS, linestyle="none", marker=".",
+                markersize=2.5, alpha=0.4, label="meas. (noisy)",
+            )
+
+        ax.plot(
+            timesteps, X[:, s_i],
+            color=COLOR_REAL, linestyle="-", linewidth=1.5, label="plant",
+        )
+        ax.plot(
+            timesteps[1:], X_pred[:, s_i],
+            color=COLOR_PRED, linestyle=":", linewidth=1.2, label="pred.",
+        )
+        #ax.plot(
+            #timesteps[1:], SP[:, s_i],
+            #color=COLOR_SP, linestyle="--", linewidth=1.0, label="setpoint",
+        #)
+        if USE_EKF:
+            ax.plot(
+                timesteps, X_est[:, s_i],
+                color=COLOR_EST, linestyle="--", linewidth=1.2, label="EKF est.",
+            )
+
+        ax.axhline(lb_states[s_i], color="grey", linestyle="--", linewidth=0.8, alpha=0.6)
+        ax.axhline(ub_states[s_i], color="grey", linestyle="--", linewidth=0.8, alpha=0.6)
+
+        sensor = "measured" if meas_col is not None else "unmeasured"
+        ax.set_title(f"{lbl} ({sensor})", fontsize=9)
+        ax.set_ylabel(f"{lbl} [{state_units[s_i]}]")
+
+    # Control inputs on the bottom row.
+    ax_f = axes[2, 0]
+    ax_f.step(timesteps[1:], U[:, 0], where="post", color=COLOR_PRED, label=r"$F$")
+    ax_f.set_title(r"$F$ (input)", fontsize=9)
+    ax_f.set_ylabel(r"$F$ [$h^{-1}$]")
+
+    ax_q = axes[2, 1]
+    ax_q.step(timesteps[1:], U[:, 1], where="post", color=COLOR_PRED, label=r"$\dot{Q}$")
+    ax_q.set_title(r"$\dot{Q}$ (input)", fontsize=9)
+    ax_q.set_ylabel(r"$\dot{Q}$ [kJ/h]")
+
+    for ax in axes.ravel():
+        ax.legend(loc="best", fontsize=7, framealpha=0.9)
+        ax.grid(True, which="major", alpha=0.3)
+        ax.xaxis.set_minor_locator(AutoMinorLocator())
+        ax.yaxis.set_minor_locator(AutoMinorLocator())
+
+    for ax in axes[-1, :]:
+        ax.set_xlabel("time [h]")
+
+    fig.tight_layout()
+    fig.subplots_adjust(top=0.92)
 
     exec_array = np.array(exec_times_ms)
     mean_time = np.mean(exec_array)
@@ -950,21 +1091,30 @@ if __name__ == "__main__":
 
     fig_bench, ax_bench = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
     fig_bench.suptitle(
-        f"Benchmark Results (Mean: {mean_time:.2f}ms, P99: {p99_time:.2f}ms)"
+        f"Benchmark Results (Mean: {mean_time:.2f}ms, P99: {p99_time:.2f}ms)",
+        fontsize=12, fontweight="bold",
     )
 
-    ax_bench[0].plot(exec_array, label="Computation Time")
+    ax_bench[0].plot(exec_array, color=COLOR_PRED, linewidth=1.2, label="Computation Time")
     ax_bench[0].set_xlabel("Simulation Step")
     ax_bench[0].set_ylabel("Time (ms)")
-    ax_bench[0].set_title("Execution Time per Step")
-    ax_bench[0].grid(True, alpha=0.3)
+    ax_bench[0].set_title("Execution Time per Step", fontsize=9)
+    ax_bench[0].legend(loc="best", fontsize=7, framealpha=0.9)
+    ax_bench[0].grid(True, which="major", alpha=0.3)
+    ax_bench[0].xaxis.set_minor_locator(AutoMinorLocator())
+    ax_bench[0].yaxis.set_minor_locator(AutoMinorLocator())
 
-    ax_bench[1].hist(exec_array, bins=30, color="orange", alpha=0.7, edgecolor="black")
+    ax_bench[1].hist(
+        exec_array, bins=30, color=COLOR_EST, alpha=0.7, edgecolor="black"
+    )
     ax_bench[1].axvline(p99_time, color="red", linestyle="--", label="99th Percentile")
-    ax_bench[1].axvline(mean_time, color="blue", linestyle="--", label="Mean")
+    ax_bench[1].axvline(mean_time, color=COLOR_REAL, linestyle="--", label="Mean")
     ax_bench[1].set_xlabel("Time (ms)")
     ax_bench[1].set_ylabel("Frequency")
-    ax_bench[1].set_title("Latency Distribution")
-    ax_bench[1].legend()
+    ax_bench[1].set_title("Latency Distribution", fontsize=9)
+    ax_bench[1].legend(loc="best", fontsize=7, framealpha=0.9)
+    ax_bench[1].grid(True, which="major", alpha=0.3)
+    ax_bench[1].xaxis.set_minor_locator(AutoMinorLocator())
+    ax_bench[1].yaxis.set_minor_locator(AutoMinorLocator())
 
     plt.show()

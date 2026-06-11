@@ -119,6 +119,8 @@ See [`examples/CSTR/nmpc_cstr.py`](examples/CSTR/nmpc_cstr.py) for a Nonlinear M
 
 The plant model uses symbolic CasADi expressions with Arrhenius kinetics and 4th-order Runge-Kutta (RK4) integration, so the optimizer gets exact first-order derivatives. The NLP is formulated with CasADi/IPOPT (multi-shooting), soft state constraints via slack variables, and a quadratic stage and terminal cost.
 
+The example also demonstrates output-feedback NMPC: only the reactor and jacket temperatures are measured online (as in a real plant, where concentrations require lab analysis), and an `ExtendedKalmanFilter` reconstructs the full state — including the unmeasured concentrations — from the noisy temperature measurements before each MPC solve.
+
 A Neural MPC version of the same process is available at [`examples/CSTR/neural_mpc_cstr.py`](examples/CSTR/neural_mpc_cstr.py), where a trained LSTM replaces the explicit dynamics. You can compare physics-based NMPC against data-driven Neural MPC on the same benchmark.
 
 ### State Estimation with Kalman Filters
@@ -152,6 +154,35 @@ for t in range(T):
 ```
 
 The `AugmentedKalmanFilter` estimates plant state, input bias, and output bias at the same time, so you get offset-free MPC tracking even with plant-model mismatch.
+
+For nonlinear plants, the `ExtendedKalmanFilter` estimates the full state from partial, noisy measurements. It takes the discrete-time dynamics as a CasADi function — for example, the exact prediction model already registered on the MPC — and derives the Jacobians automatically via CasADi algorithmic differentiation (no finite differences):
+
+```python
+from neuralmpcx.util.estimators import ExtendedKalmanFilter
+import numpy as np
+
+# Only some outputs are measured online: y = C @ x
+C = np.array([[0.0, 0.0, 1.0, 0.0],
+              [0.0, 0.0, 0.0, 1.0]])
+
+ekf = ExtendedKalmanFilter(
+    f=mpc.dynamics,      # the same CasADi function used inside the NLP
+    h=C,                 # or a casadi.Function h(x) -> y for nonlinear sensors
+    Q=np.eye(4) * 1e-6,  # process noise
+    R=np.eye(2) * 1e-5,  # measurement noise
+    x0=x0_guess,
+    P0=np.eye(4) * 0.05,
+)
+
+# In MPC loop
+for t in range(T):
+    u_opt = mpc.solve_mpc(ekf.x_est, ...)  # feed the estimate, not the true state
+    y_meas = plant.measure()
+    ekf.predict(u=u_opt)
+    ekf.update(y=y_meas)
+```
+
+See [`examples/CSTR/nmpc_cstr.py`](examples/CSTR/nmpc_cstr.py) for a complete output-feedback NMPC deployment where the EKF reconstructs unmeasured reactor concentrations from temperature measurements alone.
 
 ## RNN-Based Dynamics in MPC
 

@@ -35,13 +35,11 @@ Run from the examples/MPC_Grinding_Circuit/ directory::
 
     python mpc_grinding_circuit.py
 
-Output figures are saved to ``figures_grinding/``.
 """
 
 import contextlib
 import logging
 import os
-from pathlib import Path
 from typing import Any, Optional
 
 from tqdm import tqdm
@@ -440,8 +438,7 @@ if __name__ == "__main__":
         'font.serif':  ['Times New Roman', 'DejaVu Serif', 'serif'],
         'font.size': 10, 'axes.titlesize': 11, 'axes.labelsize': 10,
         'xtick.labelsize': 9, 'ytick.labelsize': 9, 'legend.fontsize': 9,
-        'figure.dpi': 150, 'savefig.dpi': 300, 'savefig.format': 'svg',
-        'savefig.bbox': 'tight', 'savefig.pad_inches': 0.1,
+        'figure.dpi': 150,
         'lines.linewidth': 1.5, 'axes.linewidth': 0.8,
         'axes.grid': True, 'grid.alpha': 0.3, 'grid.linewidth': 0.5,
         'legend.framealpha': 0.9, 'legend.edgecolor': '0.8',
@@ -451,12 +448,9 @@ if __name__ == "__main__":
         'xtick.top': True, 'ytick.right': True,
     })
 
-    COLOR_PV = '#000000';  COLOR_SP = '#E69F00'
+    COLOR_PV = '#000000';  COLOR_SP = '#009E73'
     COLOR_CONSTRAINT = '#D55E00';  COLOR_FEASIBLE = '#56B4E9'
     COLORS_BIAS = ['#000000', '#E69F00', '#56B4E9', '#009E73']
-
-    OUTPUT_DIR = Path("figures_grinding")
-    OUTPUT_DIR.mkdir(exist_ok=True)
 
     timesteps = np.arange(Y.shape[1]);  t_u = timesteps[:-1]
     Y_lb_vals = LinearMpc.fixed_pars["Y_lb"]
@@ -489,8 +483,6 @@ if __name__ == "__main__":
         if i == 0:
             ax.legend(loc='upper right', fontsize=8, framealpha=0.9)
     axs_cv[-1].set_xlabel('Step [–]')
-    fig_cv.savefig(OUTPUT_DIR / 'grinding_cv_trajectories.svg')
-    fig_cv.savefig(OUTPUT_DIR / 'grinding_cv_trajectories.pdf')
     plt.show()
 
     # Figure 2: Manipulated Variables
@@ -512,8 +504,6 @@ if __name__ == "__main__":
         if i == 0:
             ax.legend(loc='upper right', fontsize=8, framealpha=0.9)
     axs_mv[-1].set_xlabel('Step [–]')
-    fig_mv.savefig(OUTPUT_DIR / 'grinding_mv_trajectories.svg')
-    fig_mv.savefig(OUTPUT_DIR / 'grinding_mv_trajectories.pdf')
     plt.show()
 
     # Figure 3: Kalman Filter Bias Estimates
@@ -537,8 +527,4 @@ if __name__ == "__main__":
     ax_dy.xaxis.set_minor_locator(AutoMinorLocator()); ax_dy.yaxis.set_minor_locator(AutoMinorLocator())
     ax_dy.tick_params(which='both', direction='in', top=True, right=True, length=4)
 
-    fig_bias.savefig(OUTPUT_DIR / 'grinding_bias_estimates.svg')
-    fig_bias.savefig(OUTPUT_DIR / 'grinding_bias_estimates.pdf')
     plt.show()
-
-    print(f"All figures saved to: {OUTPUT_DIR.absolute()}")
