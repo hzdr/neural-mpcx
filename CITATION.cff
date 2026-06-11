@@ -5,7 +5,7 @@ version: "2.1.0"
 license: Apache-2.0
 repository-code: "https://github.com/hzdr/neural-mpcx"
 url: "https://github.com/hzdr/neural-mpcx"
-doi: "10.14278/rodare.4706"
+doi: "10.14278/rodare.4707"
 date-released: 2026-06-11
 authors:
   - family-names: "Lopes Júnior"
@@ -41,6 +41,6 @@ preferred-citation:
       email: "s.reinecke@hzdr.de"
       orcid: "https://orcid.org/0000-0003-2705-0692"
   year: 2026
-  doi: "10.14278/rodare.4706"
+  doi: "10.14278/rodare.4707"
   url: "https://github.com/hzdr/neural-mpcx"
   license: Apache-2.0
