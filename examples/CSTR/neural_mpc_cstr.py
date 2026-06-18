@@ -70,7 +70,7 @@ N_CONTEXT = 10
 HIDDEN_SIZE = 16
 HORIZON = 20
 N_WARMUP = 1
-NUM_ITER = 1000
+NUM_ITER = 60
 EXPERIMENT_ID = "experiment_3.4.2"
 MODEL_NAME = f"cstr-lstm-batched-{HIDDEN_SIZE}"
 USE_MEAS_NOISE = False
@@ -501,15 +501,15 @@ class NeuralMpc(Mpc[cs.MX]):
         "b": np.asarray([0, 0, 0, 0], dtype=float),
         "Q": np.asarray(
             [
-                [1.0, 0.0, 0.0, 0.0],
-                [0, 1.0, 0.0, 0.0],
-                [0, 0.0, 1e-6, 0.0],
-                [0, 0.0, 0.0, 1e-6],
+                [0.03, 0.0, 0.0, 0.0],
+                [0, 1.0, 0.0, 0.0], 
+                [0, 0.0, 0.0, 0.0],
+                [0, 0.0, 0.0, 0.0],
             ],
             dtype=float,
         ),
-        "R": np.asarray([[1, 0], [0, 1e-4]], dtype=float),
-        "w": np.asarray([1e2, 0, 1e2, 0], dtype=np.float64),
+        "R": np.asarray([[1, 0], [0,1e-4*4.25]], dtype=float),
+        "w": np.asarray([0, 0, 1e2, 0], dtype=np.float64),
         "x_scaling": np.asarray([1, 1, 1, 1], dtype=float),
         "u_scaling": np.asarray([1, 1], dtype=float),
     }
@@ -600,7 +600,7 @@ class NeuralMpc(Mpc[cs.MX]):
 
         xlb_rep = cs.repmat(x_lb, 1, N)
         xub_rep = cs.repmat(x_ub, 1, N)
-        hard_indices = [1, 3]
+        hard_indices = [0, 1, 3]
         self.constraint("s1_hard", s1[hard_indices, :], "==", 0)
         self.constraint("s2_hard", s2[hard_indices, :], "==", 0)
         # Bounds start at column n_context: columns [:n_context] are fixed to
@@ -733,7 +733,7 @@ if __name__ == "__main__":
     mpc = NeuralMpc()
     env = CSTRSystem()
 
-    setpoint_values = [[[1.5], [1.0], [100.0], [100.0]]]
+    setpoint_values = [[[0.0], [1.0], [0.0], [0.0]]]
     setpoint_timestamps = [0]
 
     state_indices = [0, 1, 2, 3]

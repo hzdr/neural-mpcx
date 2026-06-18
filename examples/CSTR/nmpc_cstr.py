@@ -62,10 +62,10 @@ from neuralmpcx.wrappers import Mpc
 #
 ALPHA = 1
 BETA = 1
-HORIZON = 10
+HORIZON = 20
 WARMUP_TYPE = "X0" # "ZEROS" OR "X0"
-NUM_ITER = 1000
-EXPERIMENT_ID = "experiment_3.1"
+NUM_ITER = 60
+EXPERIMENT_ID = "experiment_3.2"
 
 # State estimation: in a real CSTR only the reactor and jacket temperatures
 # (T_R, T_K) are measured online via thermocouples; the concentrations
@@ -175,7 +175,7 @@ class CSTRSystem(gym.Env):
     )
 
     a_bnd_mpc = (
-        np.array([[0.0], [0.0]], dtype=np.float64),
+        np.array([[0.05], [0.0]], dtype=np.float64),
         np.array([[1.0], [1.0]], dtype=np.float64),
     )
     nx = 4
@@ -512,14 +512,14 @@ class NMPC(Mpc[cs.MX]):
         "b": np.asarray([0, 0, 0, 0], dtype=float),
         "Q": np.asarray(
             [
-                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.0],
                 [0, 1.0, 0.0, 0.0],
-                [0, 0.0, 1e-6, 0.0],
-                [0, 0.0, 0.0, 1e-6],
+                [0, 0.0, 0.0, 0.0],
+                [0, 0.0, 0.0, 0.0],
             ],
             dtype=float,
         ),
-        "R": np.asarray([[1, 0], [0, 1e-4]], dtype=float),
+        "R": np.asarray([[1.0, 0], [0, 1e-4*4.25]], dtype=float),
         "w": np.asarray([0, 0, 1e2, 0], dtype=np.float64),
         "x_scaling": np.asarray([1, 1, 1, 1], dtype=float),
         "u_scaling": np.asarray([1, 1], dtype=float),
@@ -829,7 +829,7 @@ if __name__ == "__main__":
             P0=np.diag([5e-2, 5e-2, 1e-3, 1e-3]),
         )
 
-    setpoint_values = [[[1.5], [1.0], [100.0], [100.0]]]
+    setpoint_values = [[[0.0], [1.0], [0.0], [0.0]]]
     setpoint_timestamps = [0]
 
     state_indices = [0, 1, 2, 3]
