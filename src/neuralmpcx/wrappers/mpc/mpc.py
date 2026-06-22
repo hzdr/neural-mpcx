@@ -540,7 +540,6 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         model: object,
         *,
         name: str = "F",
-        input_order: str = "y_then_u",  # "y_then_u" or "u_then_y"
         input_bias: Optional[Sym] = None,  # scalar (1x1) or (nu,1)
         input_clip: Optional[Tuple[float, float]] = None,
         output_bias: Optional[Sym] = None,  # scalar (1x1) or (nx,1)
@@ -556,9 +555,11 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         """
         Build and register a CasADi dynamics function from a neural wrapper.
 
-        Creates `casadi.Function name: F(x, u, h0, c0[, d]) -> y_next` from a
+        Creates `casadi.Function name: F(u, h0, c0[, d]) -> y_next` from a
         callable model (e.g., `CasadiLSTM`) and registers it via
-        `self.set_dynamics(...)`.
+        `self.set_dynamics(...)`. The neural rollout is driven by the controls
+        `u` and the persisted LSTM state `h0`/`c0`; past outputs are not an
+        input to `F` (they enter only the numeric warmup).
 
         The LSTM is stateful: its hidden/cell states are persisted across
         `solve_mpc()` calls. F is built with two NLP parameters ``h0``
@@ -572,10 +573,8 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         Args
         ----
         model : callable
-            CasADi-friendly wrapper with `__call__(inp)` or `forward(inp)` returning MX/SX/DM.
+            CasADi-friendly wrapper with `__call__(u)` or `forward(u)` returning MX/SX/DM.
         name : str = "F"
-        input_order : {"y_then_u","u_then_y"} = "y_then_u"
-            How to stack inputs for the model: `[x;u]` or `[u;x]`.
         input_bias : Sym | None
             Additive bias on `u`. Scalar or (nu,1). Broadcast to (nu,T).
         input_clip : (float, float) | None
@@ -599,7 +598,8 @@ class Mpc(NonRetroactiveWrapper[SymType]):
 
         What it handles
         ---------------
-        - Infers dimensions from `self._states` and `self._actions_exp` (require same T).
+        - Infers dimensions (nx, T, nu) from the states/initial-states and
+          `self._actions_exp` (require same T); single-shooting-safe.
         - Applies input bias
         - Normalizes model output to shape `(nx, T)` (transpose/reshape if needed).
         - Smooth clipping for inputs/outputs.
@@ -610,8 +610,6 @@ class Mpc(NonRetroactiveWrapper[SymType]):
             Mismatched sequence lengths; disturbances T mismatch; `model` is a casadi.Function.
         TypeError
             `model` not callable / no `.forward`, or output not CasADi type.
-        ValueError
-            Invalid `input_order`.
 
         Side effects
         ------------
@@ -625,15 +623,21 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         if casadi_opts is None:
             casadi_opts = {"allow_free": True, "cse": True}
 
-        # Dimentions (full sequence T = N )
-        X = cs.vcat(self._states.values())
+        # Dimensions (full sequence T = N). In single shooting the state
+        # variables do not exist yet (state() returned None), so infer nx from
+        # the initial-state parameters and T from the prediction horizon.
         U = cs.vcat(self._actions_exp.values())
-        nx, T = int(X.size1()), int(X.size2())
         nu, Tu = int(U.size1()), int(U.size2())
+        if self._is_multishooting:
+            X = cs.vcat(self._states.values())
+            nx, T = int(X.size1()), int(X.size2())
+        else:
+            nx = sum(int(p.shape[0]) for p in self._initial_states.values())
+            T = self._prediction_horizon
         if Tu != T:
-                raise RuntimeError(
-                    "Actions and states should have the same sequence length."
-                )
+            raise RuntimeError(
+                "Actions and states should have the same sequence length."
+            )
 
         # Register h0/c0 NLP parameters for the persisted LSTM state.
         if not isinstance(n_warmup, int) or n_warmup < 1:
@@ -660,8 +664,7 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         self._h0_nlp_param = h0_par
         self._c0_nlp_param = c0_par
 
-        # Symbolic variables
-        x_sym = cs.MX.sym("x", nx, T)
+        # Symbolic control sequence (the only input fed to the neural rollout).
         u_sym = cs.MX.sym("u", nu, T)
 
         # Input BIAS (only allowed shapes; broadcast -> (nu,T))
@@ -673,28 +676,20 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         else:
             u_biased = u_sym
 
-        # Stacking as expected by the wrapper
-        if input_order == "y_then_u":
-            stack = cs.vertcat(x_sym, u_biased)
-        elif input_order == "u_then_y":
-            stack = cs.vertcat(u_biased, x_sym)
-        else:
-            raise ValueError("input_order should be either 'y_then_u' or 'u_then_y'.")
-
-        # Input smooth clipping
+        # Input smooth clipping (on the controls)
         if input_clip is not None:
             lo, hi = input_clip
-            stack = _smooth_clip(stack, lo, hi)
+            u_biased = _smooth_clip(u_biased, lo, hi)
 
         # model/wrapper call (duck-typing: __call__ or .forward)
-        def _call_model(inp, **kwargs):
+        def _call_model(u, **kwargs):
             if hasattr(model, "__call__"):
-                return model(inp, **kwargs)
+                return model(u, **kwargs)
             if hasattr(model, "forward"):
-                return model.forward(inp, **kwargs)
+                return model.forward(u, **kwargs)
             raise TypeError(" *model* is not callable nor has .forward(...)")
 
-        y_pred = _call_model(stack, h0=h0_list, c0=c0_list)
+        y_pred = _call_model(u_biased, h0=h0_list, c0=c0_list)
         if not isinstance(y_pred, (cs.MX, cs.SX, cs.DM)):
             raise TypeError("Model output should be CasADi (MX/SX/DM).")
 
@@ -719,8 +714,8 @@ class Mpc(NonRetroactiveWrapper[SymType]):
             y_norm = _smooth_clip(y_norm, lo, hi)
 
         # F formal inputs
-        in_args = [x_sym, u_sym, h0_sym, c0_sym]
-        in_names = ["x", "u", "h0", "c0"]
+        in_args = [u_sym, h0_sym, c0_sym]
+        in_names = ["u", "h0", "c0"]
         if allow_disturbances and list(self._disturbances.values()):
             D = cs.vcat(self._disturbances.values())
             nd, Td = int(D.size1()), int(D.size2())
@@ -770,8 +765,8 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         ------
         ValueError
             When setting, raises if the dynamics do not accept 2 or 3 input
-            arguments (2 to 5 for neural MPC, where F may also take the
-            ``h0``/``c0`` LSTM state parameters).
+            arguments (3 or 4 for neural MPC: ``(u, h0, c0)`` or
+            ``(u, h0, c0, d)``).
         RuntimeError
             When setting, raises if the dynamics have been already set; or if the
             function ``F`` does not take accept the expected input sizes.
@@ -787,12 +782,12 @@ class Mpc(NonRetroactiveWrapper[SymType]):
                 "casadi function."
             )
         if self._neural:
-            # Neural F may have: (x, u), (x, u, d), (x, u, h0, c0), or (x, u, h0, c0, d).
-            if n_in is None or n_in < 2 or n_in > 5 or n_out is None or n_out < 1:
+            # Neural F has: (u, h0, c0) or (u, h0, c0, d).
+            if n_in is None or n_in < 3 or n_in > 4 or n_out is None or n_out < 1:
                 raise ValueError(
-                    "The dynamics function must accept between 2 and 5 arguments "
-                    f"and return at least 1 output; got {n_in} inputs and {n_out} "
-                    "outputs instead."
+                    "The neural dynamics function must accept 3 or 4 arguments "
+                    f"(u, h0, c0[, d]) and return at least 1 output; got {n_in} "
+                    f"inputs and {n_out} outputs instead."
                 )
         else:
             if n_in is None or n_in < 2 or n_in > 3 or n_out is None or n_out < 1:
@@ -1111,17 +1106,17 @@ class Mpc(NonRetroactiveWrapper[SymType]):
     def _neural_multishooting_dynamics(self, F: cs.Function, n_in: int) -> None:
         """Creates vectorized dynamics constraints for neural MPC multi-shooting.
 
-        Calls F(X, U[, h0, c0][, D]) over the full horizon. Constraints enforce
+        Calls F(U[, h0, c0][, D]) over the full horizon. Constraints enforce
         x[:, :] == F(...)[:, :], so every column (including the first) is a genuine
         prediction rolled forward from the persisted LSTM state `h0`/`c0` — no
-        column is pinned to the measurement. When the dynamics were built by
-        `set_neural_dynamics`, the `h0`, `c0` NLP parameters are threaded as formal
-        inputs to F.
+        column is pinned to the measurement. The state variables `X` are the
+        decision variables the prediction is constrained to; the neural F is
+        driven by the controls and `h0`/`c0` only.
         """
         X = cs.vcat(self._states.values())
         U = cs.vcat(self._actions_exp.values())
 
-        args_at: tuple[Any, ...] = (X, U)
+        args_at: tuple[Any, ...] = (U,)
         if self._h0_nlp_param is not None:
             args_at = args_at + (self._h0_nlp_param, self._c0_nlp_param)
         if list(self._disturbances.values()):
@@ -1157,30 +1152,22 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         self._states = dict(zip(self._states.keys(), cs.vertsplit(X, cumsizes)))
 
     def _neural_singleshooting_dynamics(self, F: cs.Function, n_in: int) -> None:
-        """Creates state trajectory using neural dynamics with first column padding.
+        """Builds the single-shooting state trajectory from the neural dynamics.
 
-        Constructs the full state trajectory
-        to the full sequence length T (= N), then calling the vectorized
-        neural dynamics F(X0, U). When the dynamics were built by
-        `set_neural_dynamics`, the `h0`/`c0` NLP parameters are passed to F as well.
+        The neural F rolls the whole horizon forward from the persisted LSTM
+        state (`h0`/`c0`) and the controls `U`; it has no state input. Single
+        shooting has no state decision variables, so the result of
+        F(U[, h0, c0][, D]) is stored directly into `self._states`.
         """
         U = cs.vcat(self._actions_exp.values())
-        X0 = cs.vcat(self._initial_states.values())
 
-        args_at: tuple[Any, ...]
-        if list(self._disturbances.values()):
-            D = cs.vcat(self._disturbances.values())
-            args_at = (X0, U)
+        args_at: tuple[Any, ...] = (U,)
         if self._h0_nlp_param is not None:
             args_at = args_at + (self._h0_nlp_param, self._c0_nlp_param)
-            args_at = args_at + (D,)
-        else:
-            args_at = (X0, U)
-            if self._h0_nlp_param is not None:
-                args_at = args_at + (self._h0_nlp_param, self._c0_nlp_param)
+        if list(self._disturbances.values()):
+            args_at = args_at + (cs.vcat(self._disturbances.values()),)
 
-        X_next = F(*args_at)
-        X = X_next
+        X = F(*args_at)
         cumsizes = np.cumsum([0] + [s.shape[0] for s in self._initial_states.values()])
         self._states = dict(zip(self._states.keys(), cs.vertsplit(X, cumsizes)))
 

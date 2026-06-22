@@ -76,7 +76,7 @@ USE_EKF = True
 USE_MEAS_NOISE = True
 TEMP_NOISE_STD = 0.5  # Gaussian noise std dev on measured T_R, T_K [degC]
 MEAS_INDICES = [2, 3]  # indices of the measured states (T_R, T_K)
-
+_SHOOTING="multi"
 # -----------------------------------------------------------------------------
 # Normalization Parameters
 # -----------------------------------------------------------------------------
@@ -561,7 +561,7 @@ class NMPC(Mpc[cs.MX]):
             N,
             tuning_parameters=self.pars_init,
             n_context=self.n_context,
-            shooting="multi",
+            shooting=_SHOOTING,
             neural=False
         )
 
@@ -669,6 +669,11 @@ class NMPC(Mpc[cs.MX]):
         F_casadi = cs.Function("F_model", [x_sym, u_sym], [x_next_norm])
 
         self.set_dynamics(F=F_casadi, n_in=nu, n_out=nx)
+
+        if _SHOOTING == "single":
+            # Single shooting: state() returned None; the trajectory exists only
+            # after set_dynamics builds it by forward simulation. Re-bind x to it.
+            x = self.states["x"]
 
         xlb_rep = cs.repmat(x_lb, 1, N)
         xub_rep = cs.repmat(x_ub, 1, N)
@@ -903,7 +908,15 @@ if __name__ == "__main__":
                 ]
 
                 if mpc._last_solution is not None:
-                    X_pred.append(
+                    if _SHOOTING == "single":
+                        # Single shooting: x is a derived expression (not a primal
+                        # variable), so evaluate it at the solution.
+                        x_pred_traj = mpc._last_solution.value(mpc.states["x"])
+                        X_pred.append(
+                            np.asarray(x_pred_traj[:, mpc._n_context])
+                        )
+                    else:
+                        X_pred.append(
                         np.asarray(mpc._last_solution.vals["x"][:, mpc._n_context])
                     )
                 else:

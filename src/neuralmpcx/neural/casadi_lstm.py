@@ -38,7 +38,7 @@ class _CasadiLSTMCore:
         It mirrors PyTorch's LSTM(+projection) layout so you can copy trained weights
         via `load_state_dict`. The class builds a single CasADi function:
 
-        - `openlstm_casadi_step_full(X_step, h0_l*, c0_l*, weights...) -> (Y, hN_l*, cN_l*)`
+        - `openlstm_casadi_step_full(U_step, h0_l*, c0_l*, weights...) -> (Y, hN_l*, cN_l*)`
           — one step with per-layer initial states (numeric or symbolic), wrapped
           by `step_full`.
 
@@ -55,7 +55,7 @@ class _CasadiLSTMCore:
         Shapes (key ones)
         -----------------
         Single step:
-        - X_step: (1, n_inputs) → Y: (1, H_out)
+        - U_step: (1, n_inputs) → Y: (1, H_out)
         - h0 per layer: (H_out, 1) | c0 per layer: (H, 1)
 
         Notes
@@ -74,7 +74,7 @@ class _CasadiLSTMCore:
         self.h_out = proj_size if proj_size > 0 else hidden_size
         self.h_real = self.h_out
 
-        self.X_step = cs.MX.sym("X_step", 1, self.n_inputs)
+        self.U_step = cs.MX.sym("U_step", 1, self.n_inputs)
 
         # Parameter symbols (mirroring PyTorch LSTM weight layout)
         self.W_ih = []
@@ -124,7 +124,7 @@ class _CasadiLSTMCore:
             cs.MX.sym(f"c0_l{l}_full", self.hidden_size, 1)
             for l in range(self.num_layers)
         ]
-        h_list, c_list = self._lstm_step(self.X_step, h0_list, c0_list)
+        h_list, c_list = self._lstm_step(self.U_step, h0_list, c0_list)
         Y = h_list[-1].T
 
         W_ih_args = [w for w in self.W_ih]
@@ -138,7 +138,7 @@ class _CasadiLSTMCore:
         self.lstm_step_func_full = cs.Function(
             f"openlstm_casadi_step_full_{self._uid}",
             [
-                self.X_step,
+                self.U_step,
                 *h0_list,
                 *c0_list,
                 *W_ih_args,
@@ -148,7 +148,7 @@ class _CasadiLSTMCore:
                 *W_hr_args,
             ],
             [Y, *h_list, *c_list],
-            ["X"]
+            ["U"]
             + [f"h0_l{l}" for l in range(self.num_layers)]
             + [f"c0_l{l}" for l in range(self.num_layers)]
             + [f"W_ih_l{l}" for l in range(self.num_layers)]
@@ -161,13 +161,13 @@ class _CasadiLSTMCore:
             + [f"cN_l{l}" for l in range(self.num_layers)],
         )
 
-    def step_full(self, x_t, h_prev_list, c_prev_list):
+    def step_full(self, u_t, h_prev_list, c_prev_list):
         """Run one LSTM step with per-layer initial h/c (numeric or symbolic).
 
         Parameters
         ----------
-        x_t : np.ndarray or cs.MX/DM
-            Input at current timestep, shape (1, n_inputs) or (n_inputs,).
+        u_t : np.ndarray or cs.MX/DM
+            Control input at current timestep, shape (1, n_inputs) or (n_inputs,).
         h_prev_list : list of (h_out, 1)
             Previous hidden state per layer.
         c_prev_list : list of (hidden_size, 1)
@@ -179,16 +179,16 @@ class _CasadiLSTMCore:
         h_next_list : list of (h_out, 1)
         c_next_list : list of (hidden_size, 1)
         """
-        if isinstance(x_t, np.ndarray) and x_t.ndim == 1:
-            x_t = x_t[None, :]
-        elif isinstance(x_t, cs.MX):
-            x_t = cs.reshape(x_t, 1, self.n_inputs)
+        if isinstance(u_t, np.ndarray) and u_t.ndim == 1:
+            u_t = u_t[None, :]
+        elif isinstance(u_t, cs.MX):
+            u_t = cs.reshape(u_t, 1, self.n_inputs)
 
         # Pass raw numeric weights so that purely numeric inputs (numpy or DM)
         # yield numeric DM outputs; symbolic MX inputs still produce MX outputs
         # with the weights baked in as DM constants.
         outs = self.lstm_step_func_full(
-            x_t,
+            u_t,
             *h_prev_list,
             *c_prev_list,
             *self.W_ih_val,
@@ -274,13 +274,13 @@ class _CasadiLSTMCore:
                 # virtual HxH identity for the no-projection case
                 self.W_hr_val[l] = np.eye(self.hidden_size, dtype=float)
 
-    def _lstm_step(self, x_t, h_prev_layers, c_prev_layers):
+    def _lstm_step(self, u_t, h_prev_layers, c_prev_layers):
         """Executes one LSTM step across all layers.
 
         Parameters
         ----------
-        x_t : cs.MX
-            Input at current timestep, shape (1, n_inputs).
+        u_t : cs.MX
+            Control input at current timestep, shape (1, n_inputs).
         h_prev_layers : list of cs.MX
             Previous hidden states per layer, each shape (H_out, 1).
         c_prev_layers : list of cs.MX
@@ -293,7 +293,7 @@ class _CasadiLSTMCore:
         """
         h_layers = []
         c_layers = []
-        layer_input = x_t
+        layer_input = u_t
 
         for l in range(self.num_layers):
             h_l, c_l = self._lstm_layer_step(
@@ -306,13 +306,14 @@ class _CasadiLSTMCore:
 
         return h_layers, c_layers
 
-    def _lstm_layer_step(self, x_t, h_prev, c_prev, l):
+    def _lstm_layer_step(self, layer_input, h_prev, c_prev, l):
         """Computes LSTM gates and updates for a single layer.
 
         Parameters
         ----------
-        x_t : cs.MX
-            Layer input, shape (1, in_dim).
+        layer_input : cs.MX
+            Input to this layer, shape (1, in_dim). For layer 0 this is the
+            control u_t; for layers > 0 it is the previous layer's hidden state.
         h_prev : cs.MX
             Previous hidden state, shape (H_out, 1).
         c_prev : cs.MX
@@ -326,7 +327,10 @@ class _CasadiLSTMCore:
             Updated hidden state (H_out, 1) and cell state (H, 1).
         """
         gates = (
-            self.W_ih[l] @ x_t.T + self.b_ih[l] + self.W_hh[l] @ h_prev + self.b_hh[l]
+            self.W_ih[l] @ layer_input.T
+            + self.b_ih[l]
+            + self.W_hh[l] @ h_prev
+            + self.b_hh[l]
         )
         i = self._sigmoid(gates[0 : self.hidden_size, :])
         f = self._sigmoid(gates[self.hidden_size : 2 * self.hidden_size, :])
@@ -355,18 +359,20 @@ class CasadiLSTM:
     -----
     >>> model = CasadiLSTM(
     ...     n_context=10, n_inputs=2, hidden_size=128,
-    ...     horizon=20, proj_size=4, input_order="y_then_u",
+    ...     horizon=20, proj_size=4,
     ... )
     >>> model.load_state_dict(torch.load("model.pt"))
-    >>> mpc.set_neural_dynamics(model=model, input_order="y_then_u", n_warmup=1)
+    >>> mpc.set_neural_dynamics(model=model, n_warmup=1)
 
     Stateful contract
     -----------------
     The LSTM never estimates its own initial state inside the symbolic graph.
     Instead, per-layer hidden/cell states are maintained numerically between
     MPC solves via the teacher-forced helpers `estimate_numeric` (full context
-    window) and `step_numeric` (single step), and passed to `forward(inp, h0=,
-    c0=)` as the starting point of the symbolic prediction rollout.
+    window) and `step_numeric` (single step), and passed to `forward(u, h0=,
+    c0=)` as the starting point of the symbolic prediction rollout. The
+    prediction rollout consumes the controls `u` only; past outputs `y` enter
+    exclusively through the warmup helpers (teacher forcing).
 
     Parameters
     ----------
@@ -384,9 +390,6 @@ class CasadiLSTM:
         Whether to use bias terms.
     proj_size : int, default 0
         Projection size P. If 0, output size equals hidden_size.
-    input_order : str, default "y_then_u"
-        How features are stacked in the input: "y_then_u" or "u_then_y".
-        Must match the `input_order` passed to `set_neural_dynamics`.
 
     Attributes
     ----------
@@ -405,7 +408,6 @@ class CasadiLSTM:
         num_layers: int = 1,
         bias: bool = True,
         proj_size: int = 0,
-        input_order: str = "y_then_u",
     ):
         self.n_context = n_context
         self.horizon = horizon
@@ -417,7 +419,6 @@ class CasadiLSTM:
         self.bias = bias
         self.h_out = proj_size if proj_size > 0 else hidden_size
         self.output_size = self.h_out
-        self.input_order = input_order
 
         self._core = _CasadiLSTMCore(
             n_inputs=n_inputs,
@@ -439,18 +440,18 @@ class CasadiLSTM:
         """
         self._core.load_state_dict(state_dict)
 
-    def forward(self, inp, *, h0, c0):
+    def forward(self, u, *, h0, c0):
         """Roll the LSTM over the prediction horizon from external h0/c0.
 
-        Accepts stacked features from `set_neural_dynamics`, transposes and
-        reorders them, and builds the symbolic graph by chaining single-step
-        calls to `_core.step_full` for `t = 0 .. sequence_length-1`. 
+        Builds the symbolic graph by chaining single-step calls to
+        `_core.step_full` for `t = 0 .. sequence_length-1`. The rollout consumes
+        the control sequence only; past outputs `y` enter exclusively through the
+        warmup helpers (`estimate_numeric`/`step_numeric`), which seed `h0`/`c0`.
 
         Parameters
         ----------
-        inp : cs.MX, cs.DM, or torch.Tensor
-            Stacked features with shape (output_size + n_inputs, sequence_length).
-            Column ordering depends on `input_order`.
+        u : cs.MX, cs.DM, or torch.Tensor
+            Control sequence with shape (n_inputs, sequence_length).
         h0, c0 : list of cs.MX
             Per-layer initial hidden/cell states, maintained between solves
             by `estimate_numeric`/`step_numeric`.
@@ -460,24 +461,21 @@ class CasadiLSTM:
         cs.MX
             Normalized output, shape (output_size, sequence_length).
         """
-        # Transpose + reorder: (n_features, T) → (T, n_features) in [u, y]
-        # order; only the u columns drive the rollout.
-        u_cols = self._reorder(inp)[:, : self.n_inputs]
+        u_cols = u.T  # (T, n_inputs); the rollout is driven by controls + h0/c0
 
         outputs = []
         h_list = list(h0)
         c_list = list(c0)
         for t in range(0, self.sequence_length):
-            x_t = cs.reshape(u_cols[t, :], 1, self.n_inputs)
-            y_t, h_list, c_list = self._core.step_full(x_t, h_list, c_list)
+            u_t = cs.reshape(u_cols[t, :], 1, self.n_inputs)
+            y_t, h_list, c_list = self._core.step_full(u_t, h_list, c_list)
             outputs.append(y_t)  # (1, h_out)
 
         y_pred = cs.horzcat(*outputs)  # (1, horizon * h_out)
-        y_sim = y_pred
-        return self._normalize_output(y_sim)
+        return self._normalize_output(y_pred)
 
-    def __call__(self, inp, *, h0, c0):
-        return self.forward(inp, h0=h0, c0=c0)
+    def __call__(self, u, *, h0, c0):
+        return self.forward(u, h0=h0, c0=c0)
 
     def estimate_numeric(self, u_ctx, y_ctx, h_seed=None, c_seed=None):
         """Teacher-forced numeric rollout over the context window.
@@ -485,7 +483,10 @@ class CasadiLSTM:
         Executes purely numerically using `_core.step_full`. The LSTM's
         layer-0 hidden state is overwritten with the measured `y` at each
         step (teacher forcing, mirroring how the network is trained); the
-        cell state and higher-layer hidden states are propagated.
+        cell state and higher-layer hidden states are propagated. This warmup
+        (together with `step_numeric`) is the **only** place past outputs `y`
+        are consumed — the symbolic prediction rollout in `forward` uses the
+        controls alone.
 
         Parameters
         ----------
@@ -562,25 +563,6 @@ class CasadiLSTM:
             The inner LSTM model instance.
         """
         return self._core
-
-    def _reorder(self, mat):
-        """Transpose and reorder input from (n_features, T) to (T, n_features).
-
-        If input_order is "y_then_u", rotates columns from [y, u] to [u, y].
-        """
-        if isinstance(mat, (cs.MX, cs.DM)):
-            mat_t = mat.T  # (T, n_features)
-            if self.input_order == "y_then_u":
-                shift = self.output_size
-                return cs.horzcat(mat_t[:, shift:], mat_t[:, :shift])
-            return mat_t  # already [u, y]
-        if isinstance(mat, torch.Tensor):
-            mat_t = mat.transpose(0, 1)  # (T, n_features)
-            if self.input_order == "y_then_u":
-                shift = self.output_size
-                return torch.cat((mat_t[:, shift:], mat_t[:, :shift]), dim=1)
-            return mat_t  # already [u, y]
-        raise TypeError("Input should be CasADi MX/DM or torch.Tensor")
 
     def _normalize_output(self, y):
         """Normalize output shape to (output_size, sequence_length)."""

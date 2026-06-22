@@ -80,6 +80,7 @@ EXPERIMENT_ID = "experiment_3.1.1"
 MODEL_NAME = "cts-lstm-batched-128"
 USE_MEAS_NOISE = False
 NOISE_AMP = 0.01
+_SHOOTING="multi"
 
 class _TqdmLoggingHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
@@ -362,7 +363,7 @@ class NeuralMpc(Mpc[cs.MX]):
             N,
             tuning_parameters=self.pars_init,
             n_context=self.n_context,
-            shooting="multi",
+            shooting=_SHOOTING,
             neural=True,
         )
 
@@ -400,7 +401,6 @@ class NeuralMpc(Mpc[cs.MX]):
             hidden_size=HIDDEN_SIZE,
             horizon=self.horizon,
             proj_size=1,
-            input_order="y_then_u",
         )
 
         model_name = MODEL_NAME
@@ -417,11 +417,14 @@ class NeuralMpc(Mpc[cs.MX]):
 
         self.set_neural_dynamics(
             model=model,
-            input_order="y_then_u",
             output_bias=b,
             name="F_neural",
             n_warmup=N_WARMUP,
         )
+        if _SHOOTING == "single":
+            # Single shooting: state() returned None; the trajectory exists only
+            # after set_dynamics builds it by forward simulation. Re-bind x to it.
+            x = self.states["x"]
 
         xlb_rep = cs.repmat(x_lb, 1, N)
         xub_rep = cs.repmat(x_ub, 1, N)
@@ -576,7 +579,15 @@ if __name__ == "__main__":
                 ]
 
                 if mpc._last_solution is not None:
-                    X_pred.append(
+                    if _SHOOTING == "single":
+                        # Single shooting: x is a derived expression (not a primal
+                        # variable), so evaluate it at the solution.
+                        x_pred_traj = mpc._last_solution.value(mpc.states["x"])
+                        X_pred.append(
+                            np.asarray(x_pred_traj[:, 0])
+                        )
+                    else:
+                        X_pred.append(
                         np.asarray(mpc._last_solution.vals["x"][:, 0])
                     )
                 else:

@@ -26,13 +26,12 @@ Typical usage with neural MPC
 
     model = CasadiLSTM(
         n_context=10, n_inputs=1, hidden_size=128,
-        horizon=10, proj_size=1, input_order="y_then_u",
+        horizon=10, proj_size=1,
     )
     model.load_state_dict(torch.load("model.pt"))
 
     mpc.set_neural_dynamics(
         model=model,
-        input_order="y_then_u",
         output_bias=b,
         name="F_neural",
         n_warmup=1,
