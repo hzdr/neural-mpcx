@@ -389,7 +389,7 @@ class NeuralMpc(Mpc[cs.MX]):
         self.parameter("u_scaling", (nu, 1))
         SP = self.parameter("SP", (nx, 1))
 
-        x, _ = self.state("x", nx, bound_initial=False)
+        x, x0 = self.state("x", nx, bound_initial=False)
         u, u_exp, u0 = self.action("u", nu, lb=a_bnd[0], ub=a_bnd[1])
         s1, _, _ = self.variable("s1", (nx, N), lb=0)
         s2, _, _ = self.variable("s2", (nx, 1), lb=0)
@@ -420,7 +420,6 @@ class NeuralMpc(Mpc[cs.MX]):
             input_order="y_then_u",
             output_bias=b,
             name="F_neural",
-            remove_bounds_on_initial_action=True,
             n_warmup=N_WARMUP,
         )
 
@@ -433,11 +432,11 @@ class NeuralMpc(Mpc[cs.MX]):
             "x_lb",
             xlb_rep * x_scaling - s1,
             "<=",
-            x[:, (self.n_context - 1) : -1] * x_scaling,
+            x[:, :] * x_scaling,
         )
         self.constraint(
             "x_ub",
-            x[:, (self.n_context - 1) : -1] * x_scaling,
+            x[:, :] * x_scaling,
             "<=",
             xub_rep * x_scaling + s1,
         )
@@ -448,22 +447,21 @@ class NeuralMpc(Mpc[cs.MX]):
         e_N = e_N * x_scaling
         S = (gamma**N) * (0.5 * cs.bilin(H_s, e_N) + h_s.T @ e_N + c_s + w.T @ s2)
 
-        e_0 = x[:, self.n_context - 1] - SP
+        e_0 = x0 - SP
         e_0 = e_0 * x_scaling
         V0 = 0.5 * cs.bilin(H_0, e_0) + h_0.T @ e_0 + c_0
 
         Lt = 0.0
 
-        for k in range(self.n_context - 1, self.n_context - 1 + N):
+        for k in range(0, N):
             e_k = x[:, k] - SP
             e_k = e_k * x_scaling
-            k_abs = k - (self.n_context - 1)
-            Lt += (gamma**k_abs) * (
+            Lt += (gamma**k) * (
                 0.5 * cs.bilin(H_lt, cs.vertcat(e_k, u_exp[:, k]))
                 + h_lt.T @ cs.vertcat(e_k, u_exp[:, k])
                 + c_lt
             )
-            Lt += (gamma**k_abs) * (w.T @ s1[:, k_abs])
+            Lt += (gamma**k) * (w.T @ s1[:, k])
 
         self.minimize(V0 + S + Lt)
 
@@ -579,7 +577,7 @@ if __name__ == "__main__":
 
                 if mpc._last_solution is not None:
                     X_pred.append(
-                        np.asarray(mpc._last_solution.vals["x"][:, mpc._n_context])
+                        np.asarray(mpc._last_solution.vals["x"][:, 0])
                     )
                 else:
                     X_pred.append(np.asarray([np.nan]).reshape(1, 1))

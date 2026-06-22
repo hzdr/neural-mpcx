@@ -393,7 +393,7 @@ class CasadiLSTM:
     output_size : int
         Output dimension (proj_size if >0, else hidden_size).
     sequence_length : int
-        Total sequence length (n_context + horizon).
+        Total sequence length (horizon).
     """
 
     def __init__(
@@ -410,7 +410,7 @@ class CasadiLSTM:
         self.n_context = n_context
         self.horizon = horizon
         self.n_inputs = n_inputs
-        self.sequence_length = n_context + horizon
+        self.sequence_length = horizon
         self.proj_size = proj_size
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -444,9 +444,7 @@ class CasadiLSTM:
 
         Accepts stacked features from `set_neural_dynamics`, transposes and
         reorders them, and builds the symbolic graph by chaining single-step
-        calls to `_core.step_full` for `t = n_context .. sequence_length-1`.
-        Outputs over the context window are zero-padded — the MPC dynamics
-        constraint slices `[:, n_context:]` and ignores them.
+        calls to `_core.step_full` for `t = 0 .. sequence_length-1`. 
 
         Parameters
         ----------
@@ -469,14 +467,13 @@ class CasadiLSTM:
         outputs = []
         h_list = list(h0)
         c_list = list(c0)
-        for t in range(self.n_context, self.sequence_length):
+        for t in range(0, self.sequence_length):
             x_t = cs.reshape(u_cols[t, :], 1, self.n_inputs)
             y_t, h_list, c_list = self._core.step_full(x_t, h_list, c_list)
             outputs.append(y_t)  # (1, h_out)
 
         y_pred = cs.horzcat(*outputs)  # (1, horizon * h_out)
-        y_pad = np.zeros((1, self.n_context * self.h_out))
-        y_sim = cs.horzcat(y_pad, y_pred)
+        y_sim = y_pred
         return self._normalize_output(y_sim)
 
     def __call__(self, inp, *, h0, c0):

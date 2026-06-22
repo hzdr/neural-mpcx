@@ -189,7 +189,7 @@ See [`examples/CSTR/nmpc_cstr.py`](examples/CSTR/nmpc_cstr.py) for a complete ou
 NeuralMPCX uses recurrent neural networks as internal dynamics models inside the MPC. Making this work required several adaptations:
 
 - Converting PyTorch RNNs into CasADi
-- Providing rolling arrays of context actions and states (`u0` and `x0`, each with `n_context` timesteps) that feed the LSTM warmup
+- Providing rolling context arrays of past actions and states (`action_context` and `state_context`, each `n_context` timesteps long) that feed the LSTM warmup
 - Persisting the LSTM hidden/cell states across MPC solves
 
 Only LSTM networks are supported so far.
@@ -203,6 +203,8 @@ $$
 During training, the initial state is estimated from a window of past data $\{ y_{k-1}, \ldots, y_{k-N_c}, u_{k-1}, \ldots, u_{k-N_c} \}$: for $N_c$ steps, measured outputs $y_{k-i}$ are fed to the model instead of predicted ones (teacher forcing), and $x_{k-N_c}$ is set to zero. The model acts as its own state estimator, so training runs a joint backward pass over both estimation and forecasting.
 
 At deployment, NeuralMPCX makes the LSTM **stateful**: its hidden and cell states $(h, c)$ persist on the `Mpc` instance across `solve_mpc()` calls and enter the optimization problem as plain NLP parameters `h0`/`c0`. The dynamics function `F(x, u, h0, c0)` simply unrolls the LSTM symbolically over the prediction horizon starting from these states — no state estimation happens inside the optimizer, which keeps the NLP graph small and the solve fast.
+
+Because the persisted $(h, c)$ already encode the current measurement, the neural NLP needs **no anchor column**: it spans exactly `T = prediction_horizon` columns, and every column `x[:, k]` is a genuine prediction rolled forward from `h0`/`c0` (the dynamics constraint is `x[:, :] == F(x, u, h0, c0)`). The most recent measurement and applied action survive only as the cost parameters `x0`/`u0` — used for terms like $\Delta u$ and initial/terminal penalties — and are **not** inputs to `F`. As a result, `solve_mpc()` applies `u[:, 0]` as the receding-horizon action and `x[:, 0]` is the first predicted future state. (Classic MPC instead keeps the usual anchor column `x[:, 0] == x0` and spans `prediction_horizon + 1` columns.)
 
 ### The warmup algorithm
 

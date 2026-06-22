@@ -170,7 +170,8 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         A None or a dict containing all tuning parameters (e.g. cost function weighting matrices, slack penalty matrices etc.)
     n_context: int
         A positive integer for the context inputs used to warmup the Neural Network Model.
-        At every MPC computation, the initial hidden state is estimated by using a context window with n_context past observations
+        At every MPC computation, the LSTM hidden/cell states are estimated numerically by warm-up over 
+        a context window of ``n_context`` past observations.
     control_horizon : int, optional
         A positive integer for the control horizon of the MPC controller. If not given,
         it is set equal to the control horizon.
@@ -286,14 +287,8 @@ class Mpc(NonRetroactiveWrapper[SymType]):
     @property
     def first_actions(self) -> dict[str, SymType]:
         """Gets the first effective (along the prediction horizon) actions of the controller."""
-        if self._neural:
-            return {n: a[:, self._n_context] for n, a in self._actions.items()}
         return {n: a[:, 0] for n, a in self._actions.items()}
 
-    @property
-    def first_context_actions(self) -> dict[str, SymType]:
-        """Gets the first effective (along the prediction horizon) actions of the controller."""
-        return {n: a[:, : self._n_context] for n, a in self._actions.items()}
 
     @property
     def ns(self) -> int:
@@ -420,20 +415,32 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         """
         x0_name = _n(name)
         if self._is_multishooting:
-            shape = (size, self._prediction_horizon + self._n_context)
+            # Neural MPC predicts every column from the persisted LSTM state, so it
+            # uses a plain N-column layout. Conventional MPC keeps the extra anchor
+            # column (x[:, 0] == x0), hence N + 1 columns.
+            T = (
+                self._prediction_horizon
+                if self._neural
+                else self._prediction_horizon + 1
+            )
+            shape = (size, T)
             lb = np.broadcast_to(lb, shape).astype(float)
             ub = np.broadcast_to(ub, shape).astype(float)
             if not bound_initial:
-                lb[:, : self._n_context] = -np.inf
-                ub[:, : self._n_context] = +np.inf
+                if self._neural:
+                    pass  # column 0 is a genuine prediction; keep its bounds
+                else:
+                    lb[:, : 1] = -np.inf
+                    ub[:, : 1] = +np.inf
             if not bound_terminal:
                 lb[:, -1] = -np.inf
                 ub[:, -1] = +np.inf
 
             # create state variable and initial state constraint
             x = self.nlp.variable(name, shape, lb, ub)[0]
-            x0 = self.nlp.parameter(x0_name, (size, self._n_context))
-            self.nlp.constraint(x0_name, x[:, : self._n_context], "==", x0)
+            x0 = self.nlp.parameter(x0_name, (size, 1))
+            if not self._neural: #Only conventional state-space MPC needs this constraint
+                self.nlp.constraint(x0_name, x[:, 0], "==", x0)
         else:
             if np.any(lb != -np.inf) or np.any(ub != +np.inf):
                 raise RuntimeError(
@@ -441,7 +448,7 @@ class Mpc(NonRetroactiveWrapper[SymType]):
                     "created after the dynamics have been set"
                 )
             x = None
-            x0 = self.nlp.parameter(x0_name, (size, self._n_context))
+            x0 = self.nlp.parameter(x0_name, (size, 1))
         self._states[name] = x
         self._initial_states[x0_name] = x0
         return x, x0
@@ -476,34 +483,16 @@ class Mpc(NonRetroactiveWrapper[SymType]):
             The same control  action variable, but expanded to the same length of the
             prediction horizon.
         """
-        if self._neural:
-            nu_free = ceil(
-                self._control_horizon / self._input_spacing + self._n_context
-            )
-        else:
-            nu_free = ceil(self._control_horizon / self._input_spacing)
+        nu_free = ceil(self._control_horizon / self._input_spacing)
         u = self.nlp.variable(name, (size, nu_free), lb, ub)[0]
         u0_name = _n(name)
-        u0 = self.nlp.parameter(u0_name, (size, self._n_context))
-        if self._neural:
-            u_exp: SymType = (
-                u
-                if self._input_spacing == 1
-                else cs.horzcat(
-                    u[:, : self._n_context],
-                    repeat(u[:, self._n_context : nu_free], (1, self._input_spacing))[
-                        :, : self._control_horizon
-                    ],
-                )
-            )
-            gap = (self._prediction_horizon + self._n_context) - u_exp.shape[1]
-        else:
-            u_exp: SymType = (
-                u
-                if self._input_spacing == 1
-                else repeat(u, (1, self._input_spacing))[:, : self._control_horizon]
-            )
-            gap = self._prediction_horizon - u_exp.shape[1]
+        u0 = self.nlp.parameter(u0_name, (size, 1))
+        u_exp: SymType = (
+            u
+            if self._input_spacing == 1
+            else repeat(u, (1, self._input_spacing))[:, : self._control_horizon]
+        )
+        gap = self._prediction_horizon - u_exp.shape[1]
         u_last = u_exp[:, -1]
         u_exp = cs.horzcat(u_exp, *(u_last for _ in range(gap)))
         self._actions[name] = u
@@ -553,13 +542,11 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         name: str = "F",
         input_order: str = "y_then_u",  # "y_then_u" or "u_then_y"
         input_bias: Optional[Sym] = None,  # scalar (1x1) or (nu,1)
-        input_bias_scope: str = "post_context",  # "post_context" or "all"
         input_clip: Optional[Tuple[float, float]] = None,
         output_bias: Optional[Sym] = None,  # scalar (1x1) or (nx,1)
         output_clip: Optional[Tuple[float, float]] = None,
         allow_disturbances: bool = False,
         casadi_opts: Optional[dict] = None,
-        remove_bounds_on_initial_action: Optional[bool] = False,
         warmstart: Union[
             Literal["last", "last-successful"], WarmStartStrategy
         ] = "last-successful",
@@ -570,9 +557,8 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         Build and register a CasADi dynamics function from a neural wrapper.
 
         Creates `casadi.Function name: F(x, u, h0, c0[, d]) -> y_next` from a
-        callable model (e.g., `CasadiLSTM`), registers it via
-        `self.set_dynamics(...)`, and finalizes MPC setup with
-        `self._setup_Neural_MPC(...)`.
+        callable model (e.g., `CasadiLSTM`) and registers it via
+        `self.set_dynamics(...)`.
 
         The LSTM is stateful: its hidden/cell states are persisted across
         `solve_mpc()` calls. F is built with two NLP parameters ``h0``
@@ -592,7 +578,6 @@ class Mpc(NonRetroactiveWrapper[SymType]):
             How to stack inputs for the model: `[x;u]` or `[u;x]`.
         input_bias : Sym | None
             Additive bias on `u`. Scalar or (nu,1). Broadcast to (nu,T).
-        input_bias_scope : {"post_context","all"} = "post_context"
         input_clip : (float, float) | None
             Smoothly clip model inputs.
         output_bias : Sym | None
@@ -603,7 +588,6 @@ class Mpc(NonRetroactiveWrapper[SymType]):
             If True and disturbances exist, include `d ∈ R^{nd×T}`.
         casadi_opts : dict | None
             Options for `casadi.Function`. Default `{"allow_free": True, "cse": True}`.
-        remove_bounds_on_initial_action : bool = False
         warmstart : {"last","last-successful"} | WarmStartStrategy = "last-successful"
         use_last_action_on_fail : bool = False
         n_warmup : int = 1
@@ -616,7 +600,7 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         What it handles
         ---------------
         - Infers dimensions from `self._states` and `self._actions_exp` (require same T).
-        - Applies context-aware input bias when `post_context` and `n_context>0`.
+        - Applies input bias
         - Normalizes model output to shape `(nx, T)` (transpose/reshape if needed).
         - Smooth clipping for inputs/outputs.
 
@@ -627,12 +611,11 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         TypeError
             `model` not callable / no `.forward`, or output not CasADi type.
         ValueError
-            Invalid `input_order` or `input_bias_scope`.
+            Invalid `input_order`.
 
         Side effects
         ------------
         - Registers `F` via `self.set_dynamics(..., warmstart=..., use_last_action_on_fail=...)`.
-        - Calls `self._setup_Neural_MPC(remove_bounds_on_initial_action)`.
         """
         if isinstance(model, cs.Function):
             raise RuntimeError(
@@ -642,16 +625,15 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         if casadi_opts is None:
             casadi_opts = {"allow_free": True, "cse": True}
 
-        # Dimentions (full sequence T = n_context + N )
+        # Dimentions (full sequence T = N )
         X = cs.vcat(self._states.values())
         U = cs.vcat(self._actions_exp.values())
         nx, T = int(X.size1()), int(X.size2())
         nu, Tu = int(U.size1()), int(U.size2())
         if Tu != T:
-            raise RuntimeError(
-                "Actions and states should have the same sequence length."
-            )
-        n_ctx = getattr(self, "n_context", getattr(self, "_n_context", 0))
+                raise RuntimeError(
+                    "Actions and states should have the same sequence length."
+                )
 
         # Register h0/c0 NLP parameters for the persisted LSTM state.
         if not isinstance(n_warmup, int) or n_warmup < 1:
@@ -685,14 +667,8 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         # Input BIAS (only allowed shapes; broadcast -> (nu,T))
         if input_bias is not None:
             B_full = _broadcast_input_bias(input_bias, nu, T)
-            if input_bias_scope == "post_context" and n_ctx > 0:
-                B = cs.horzcat(cs.MX.zeros(nu, n_ctx), B_full[:, n_ctx:])
-            elif input_bias_scope == "all":
-                B = B_full
-            else:
-                raise ValueError(
-                    "input_bias_scope should be either 'post_context' or 'all'."
-                )
+
+            B = B_full
             u_biased = u_sym + B
         else:
             u_biased = u_sym
@@ -760,7 +736,6 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         self.set_dynamics(
             F, warmstart=warmstart, use_last_action_on_fail=use_last_action_on_fail
         )
-        self._setup_Neural_MPC(remove_bounds_on_initial_action)
 
     def set_dynamics(
         self,
@@ -867,13 +842,16 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         Behavior by mode
         ----------------
         - Neural mode (`self._neural is True`):
-          * Builds initial state blocks from the **last** `self._n_context`
-            rows of `state_context[:, state_indices]`.
-          * Provides action-history parameter `u0` from the last
-            `self._n_context` steps of `action_context`.
+          * Builds state parameter `x0` from the **last** step of 
+          `state_context[:, state_indices]`.
+          * Provides the first action parameter `u0` from the last
+            step of `action_context`.
+          * Updates the persisted LSTM `(h, c)` numerically using the **last**
+            `self._n_context` rows of `state_context`/`action_context` (the
+            warmup window), and passes them as the `h0`/`c0` parameters.
           * Sets the set-point parameter `SP` to `setpoint[state_indices, 0]`.
-          * Returns the control at column `self._n_context` of the solved action
-            trajectory.
+          * Returns the control at column 0 of the solved action
+            trajectory (the receding-horizon action applied now).
         - Non-neural mode (`self._neural is False`):
           * Builds initial state blocks directly from `state[state_indices]`
             (accepts array-like or dict-of-arrays).
@@ -887,8 +865,9 @@ class Mpc(NonRetroactiveWrapper[SymType]):
             it must index with `state_indices`. If a dict, values are stacked in
             the order of `self.initial_states.keys()`.
         state_context : array_like, shape (T_ctx, N_full)
-            Rolling window of measured states. Only the last `self._n_context`
-            rows are used. Columns are filtered with `state_indices` to match
+            Rolling window of measured states. The last `self._n_context` rows feed
+            the numeric `(h, c)` warmup; the last row builds the
+            `x0` parameter. Columns are filtered with `state_indices` to match
             the internal MPC state ordering (sum of block sizes in
             `self.initial_states`).
         state_indices : array_like of int, shape (nx_sel,)
@@ -899,8 +878,9 @@ class Mpc(NonRetroactiveWrapper[SymType]):
             Recent control history. Accepted shapes:
             - `(T_ctx, na)` or `(na, T_ctx)` for multi-input,
             - `(T_ctx,)` for single-input.
-            The last `self._n_context` time steps are used to build the
-            `u0` parameter with shape `(na, self._n_context)`.
+            The last `self._n_context` steps feed the numeric `(h, c)` warmup; the
+            last step build the `u0` parameter with shape
+            `(na, 1)`.
         setpoint : array_like, optional
             Target output/set-point. In neural mode, only
             `setpoint[state_indices, 0]` is consumed (i.e., first column for the
@@ -946,10 +926,11 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         if self._neural:
             mpcstates = self.initial_states
             mpcactions = self.initial_actions
-            # Select relevant states from state_context, using the last `_n_context` measurements
+            # First parameters use only the most recent  measurement;
+            # the full `_n_context` window feeds the numeric h/c warmup below.
             selected_states_contexts = state_context[
-                -self._n_context :, state_indices
-            ]  # Shape: (len(state_indices), _n_context)
+                -1 :, state_indices
+            ]  # Shape: (len(state_indices), 1)
 
             if (
                 selected_states_contexts.shape[1] == 1
@@ -970,7 +951,7 @@ class Mpc(NonRetroactiveWrapper[SymType]):
                 )
             x0_dict = dict(zip(mpcstates.keys(), states))
 
-            _action_context = np.array(action_context).copy()
+            _action_context = np.array(action_context)[-1 :].copy()
 
             if _action_context.shape[1] == 1:  # Case: Lists with single elements
                 _action_context = _action_context.flatten()[
@@ -1094,12 +1075,7 @@ class Mpc(NonRetroactiveWrapper[SymType]):
             self._last_solution = sol
 
         # times.append(sol.stats["t_wall_solver"])
-        if self._neural:
-            u_opt = cs.vertcat(
-                *(sol.vals[u][:, self._n_context] for u in self.actions.keys())
-            )
-        else:
-            u_opt = cs.vertcat(*(sol.vals[u][:, 0] for u in self.actions.keys()))
+        u_opt = cs.vertcat(*(sol.vals[u][:, 0] for u in self.actions.keys()))
         if sol.success:
             self._last_action = u_opt
         elif self._last_action_on_fail and self._last_action is not None:
@@ -1135,10 +1111,12 @@ class Mpc(NonRetroactiveWrapper[SymType]):
     def _neural_multishooting_dynamics(self, F: cs.Function, n_in: int) -> None:
         """Creates vectorized dynamics constraints for neural MPC multi-shooting.
 
-        Calls F(X, U[, h0, c0][, D]) over the full horizon with context window
-        handling. Constraints enforce x[:, n_context:] == F(...)[:, n_context:].
-        When the dynamics were built by `set_neural_dynamics`, the `h0`, `c0`
-        NLP parameters are threaded as formal inputs to F.
+        Calls F(X, U[, h0, c0][, D]) over the full horizon. Constraints enforce
+        x[:, :] == F(...)[:, :], so every column (including the first) is a genuine
+        prediction rolled forward from the persisted LSTM state `h0`/`c0` — no
+        column is pinned to the measurement. When the dynamics were built by
+        `set_neural_dynamics`, the `h0`, `c0` NLP parameters are threaded as formal
+        inputs to F.
         """
         X = cs.vcat(self._states.values())
         U = cs.vcat(self._actions_exp.values())
@@ -1152,7 +1130,7 @@ class Mpc(NonRetroactiveWrapper[SymType]):
 
         xs_next = F(*args_at)
         self.constraint(
-            "dyn", xs_next[:, self._n_context :], "==", X[:, self._n_context :]
+            "dyn", xs_next[:, :], "==", X[:, :]
         )
 
     def _singleshooting_dynamics(self, F: cs.Function, n_in: int, n_out: int) -> None:
@@ -1179,12 +1157,12 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         self._states = dict(zip(self._states.keys(), cs.vertsplit(X, cumsizes)))
 
     def _neural_singleshooting_dynamics(self, F: cs.Function, n_in: int) -> None:
-        """Creates state trajectory using neural dynamics with context padding.
+        """Creates state trajectory using neural dynamics with first column padding.
 
-        Constructs the full state trajectory by padding the initial state context X0 with zeros
-        to match the prediction horizon, then calling the vectorized neural dynamics F(X0_padded, U).
-        When the dynamics were built by `set_neural_dynamics`, the `h0`/`c0` NLP
-        parameters are passed to F as well.
+        Constructs the full state trajectory
+        to the full sequence length T (= N), then calling the vectorized
+        neural dynamics F(X0, U). When the dynamics were built by
+        `set_neural_dynamics`, the `h0`/`c0` NLP parameters are passed to F as well.
         """
         U = cs.vcat(self._actions_exp.values())
         X0 = cs.vcat(self._initial_states.values())
@@ -1192,16 +1170,12 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         args_at: tuple[Any, ...]
         if list(self._disturbances.values()):
             D = cs.vcat(self._disturbances.values())
-            X0_padded = cs.horzcat(
-                X0, cs.DM.zeros(X0.size1(), U.size2() + D.size2() - X0.size2())
-            )
-            args_at = (X0_padded, U)
-            if self._h0_nlp_param is not None:
-                args_at = args_at + (self._h0_nlp_param, self._c0_nlp_param)
+            args_at = (X0, U)
+        if self._h0_nlp_param is not None:
+            args_at = args_at + (self._h0_nlp_param, self._c0_nlp_param)
             args_at = args_at + (D,)
         else:
-            X0_padded = cs.horzcat(X0, cs.DM.zeros(X0.size1(), U.size2() - X0.size2()))
-            args_at = (X0_padded, U)
+            args_at = (X0, U)
             if self._h0_nlp_param is not None:
                 args_at = args_at + (self._h0_nlp_param, self._c0_nlp_param)
 
@@ -1210,45 +1184,6 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         cumsizes = np.cumsum([0] + [s.shape[0] for s in self._initial_states.values()])
         self._states = dict(zip(self._states.keys(), cs.vertsplit(X, cumsizes)))
 
-    def _setup_Neural_MPC(self, remove_bounds_on_initial_action: bool) -> None:
-        """Sets up Neural MPC by creating equality constraints for initial action context.
-
-        Adds constraints to fix the first n_context actions u[:, :n_context] to match the
-        provided initial action parameters u0. Optionally removes bounds on these initial actions
-        if remove_bounds_on_initial_action is True.
-        """
-        na = self.na
-        if na <= 0:
-            raise ValueError(f"Expected Mpc with na>0; got na={na} instead.")
-
-        initial_actions = self.initial_actions
-        first_context_actions = self.first_context_actions
-
-        for name, value in first_context_actions.items():
-            u0_name = f"{name}_0"
-
-            if u0_name not in initial_actions:
-                raise KeyError(f"Missing key in self.initial_actions: {u0_name}")
-            a0_context = initial_actions[u0_name]
-            u0_context = value
-            self.nlp.constraint(f"{u0_name}", u0_context, "==", a0_context)
-
-        self.unwrapped.name += "_neural"
-
-        if remove_bounds_on_initial_action:
-            for name, a in self.first_context_actions.items():
-                na_ = a.size1()
-                self.nlp.remove_variable_bounds(
-                    name, "both", ((r, 0) for r in range(na_))
-                )
-
-        # invalidate caches for V and Q since some modifications have been done
-
-        nlp_ = self
-        while nlp_ is not nlp_.unwrapped:
-            invalidate_caches_of(nlp_)
-            nlp_ = nlp_.nlp
-        invalidate_caches_of(nlp_.unwrapped)
 
     def _get_tuning_parameters(
         self,

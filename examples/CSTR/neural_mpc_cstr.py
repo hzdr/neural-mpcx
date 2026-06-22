@@ -524,9 +524,11 @@ class NeuralMpc(Mpc[cs.MX]):
         - Soft state constraints via slack variables
         - Quadratic stage and terminal costs
 
-        The MPC uses multi-shooting with neural dynamics propagating the full
-        sequence. The context window (first n_context steps) is fixed to
-        measured data, and optimization occurs over the remaining horizon.
+        The MPC uses multi-shooting with neural dynamics propagating the
+        horizon. The first column (first step) is fixed to the latest
+        measurement, and optimization occurs over the remaining horizon. The
+        LSTM hidden/cell states are warmed up numerically from an ``n_context``
+        window outside the NLP.
 
         Notes
         -----
@@ -569,8 +571,8 @@ class NeuralMpc(Mpc[cs.MX]):
         s2, _, _ = self.variable("s2", (nx, 1), lb=0)
 
         du = []
-        du.append(u_exp[:, self.n_context] - u0[:, -1])
-        for t in range(self.n_context + 1, N + self.n_context):
+        du.append(u_exp[:, 0] - u0)
+        for t in range(1, N):
             du.append((u_exp[:, t] - u_exp[:, t - 1]) * u_scaling)
         du = cs.hcat(du)
 
@@ -594,7 +596,6 @@ class NeuralMpc(Mpc[cs.MX]):
             input_order="y_then_u",
             output_bias=b,
             name="F_neural",
-            remove_bounds_on_initial_action=True,
             n_warmup=N_WARMUP,
         )
 
@@ -603,18 +604,15 @@ class NeuralMpc(Mpc[cs.MX]):
         hard_indices = [0, 1, 3]
         self.constraint("s1_hard", s1[hard_indices, :], "==", 0)
         self.constraint("s2_hard", s2[hard_indices, :], "==", 0)
-        # Bounds start at column n_context: columns [:n_context] are fixed to
-        # the measurements, so constraining them can make the NLP infeasible
-        # whenever a noisy measurement falls outside the bounds.
         self.constraint(
             "x_lb",
             xlb_rep * x_scaling - s1,
             "<=",
-            x[:, self.n_context :] * x_scaling,
+            x[:, :] * x_scaling,
         )
         self.constraint(
             "x_ub",
-            x[:, self.n_context :] * x_scaling,
+            x[:, :] * x_scaling,
             "<=",
             xub_rep * x_scaling + s1,
         )
@@ -627,13 +625,12 @@ class NeuralMpc(Mpc[cs.MX]):
 
         Lt = 0.0
 
-        for k in range(self.n_context - 1, self.n_context - 1 + N):
+        for k in range(0, N):
             e_k = x[:, k] - SP
             e_k = e_k * x_scaling
-            k_abs = k - (self.n_context - 1)
-            Lt += (gamma**k_abs) * (cs.bilin(Q, e_k))
-            Lt += (gamma**k_abs) * (cs.bilin(R, du[:, k_abs]))
-            Lt += (gamma**k_abs) * (w.T @ s1[:, k_abs])
+            Lt += (gamma**k) * (cs.bilin(Q, e_k))
+            Lt += (gamma**k) * (cs.bilin(R, du[:, k]))
+            Lt += (gamma**k) * (w.T @ s1[:, k])
 
         self.minimize(S + Lt)
 
@@ -785,7 +782,7 @@ if __name__ == "__main__":
 
                 if mpc._last_solution is not None:
                     X_pred.append(
-                        np.asarray(mpc._last_solution.vals["x"][:, mpc._n_context])
+                        np.asarray(mpc._last_solution.vals["x"][:, 0])
                     )
                 else:
                     X_pred.append(
@@ -966,3 +963,4 @@ if __name__ == "__main__":
     ax_bench[1].yaxis.set_minor_locator(AutoMinorLocator())
 
     plt.show()
+    

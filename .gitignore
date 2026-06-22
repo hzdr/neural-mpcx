@@ -152,6 +152,7 @@ env/
 *_venv/
 .*env
 .vscode
+*env*
 
 # Spyder project settings
 .spyderproject

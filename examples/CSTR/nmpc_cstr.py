@@ -679,11 +679,11 @@ class NMPC(Mpc[cs.MX]):
             "x_lb",
             xlb_rep * x_scaling - s1,
             "<=",
-            x[:, (self.n_context - 1) : -1] * x_scaling,
+            x[:, 0 : -1] * x_scaling,
         )
         self.constraint(
             "x_ub",
-            x[:, (self.n_context - 1) : -1] * x_scaling,
+            x[:, 0 : -1] * x_scaling,
             "<=",
             xub_rep * x_scaling + s1,
         )
@@ -699,10 +699,9 @@ class NMPC(Mpc[cs.MX]):
         for k in range(self.n_context - 1, self.n_context - 1 + N):
             e_k = x[:, k] - SP
             e_k = e_k * x_scaling
-            k_abs = k - (self.n_context - 1)
-            Lt += (gamma**k_abs) * (cs.bilin(Q, e_k))
-            Lt += (gamma**k_abs) * (cs.bilin(R, du[:, k_abs]))
-            Lt += (gamma**k_abs) * (w.T @ s1[:, k_abs])
+            Lt += (gamma**k) * (cs.bilin(Q, e_k))
+            Lt += (gamma**k) * (cs.bilin(R, du[:, k]))
+            Lt += (gamma**k) * (w.T @ s1[:, k])
 
         self.minimize(S + Lt)
 
@@ -846,11 +845,11 @@ if __name__ == "__main__":
     Y_MEAS = []
     if WARMUP_TYPE == "X0":
         state_context = np.tile(
-            np.asarray(state_fb).reshape(1, -1), (mpc.n_context, 1)
+            np.asarray(state_fb).reshape(1, -1), (1, 1)
         )
     else:
-        state_context = np.zeros((mpc.n_context, CSTRSystem.nx))
-    action_context = np.zeros((mpc.n_context, CSTRSystem.nu))
+        state_context = np.zeros((1, CSTRSystem.nx))
+    action_context = np.zeros((1, CSTRSystem.nu))
 
     exec_times_ms = []
 
@@ -898,9 +897,9 @@ if __name__ == "__main__":
 
                 state_context = np.vstack(
                     [state_context, np.asarray(state_fb).reshape(1, -1)]
-                )[-mpc.n_context :]
+                )[-1 :]
                 action_context = np.vstack([action_context, np.asarray(u_opt).T])[
-                    -mpc.n_context :
+                    -1 :
                 ]
 
                 if mpc._last_solution is not None:
