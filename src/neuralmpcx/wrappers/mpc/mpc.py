@@ -504,6 +504,18 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         """Adds a disturbance parameter to the MPC controller along the whole prediction
         horizon.
 
+        Creates a parameter of shape ``(size, prediction_horizon)`` — one column
+        per horizon step. In **neural** mode every column is a genuine predicted
+        step (there is no pinned anchor column), so column ``t`` is the
+        disturbance acting during predicted step ``t``; the
+        ``set_neural_dynamics(allow_disturbances=True)`` opt-in is required. In
+        the **conventional** mode the columns index the step dynamics
+        ``F(x_k, u_k, d_k)``. In **both** modes ``solve_mpc`` can hold the latest
+        measurement constant across all columns by default (pass
+        ``disturbance_context``; in conventional mode only its last row is used,
+        since there is no warmup), and an explicit
+        ``dynamic_pars={<name>: (size, T)}`` forecast overrides it.
+
         Parameters
         ----------
         name : str
@@ -584,7 +596,9 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         output_clip : (float, float) | None
             Smoothly clip model outputs.
         allow_disturbances : bool = False
-            If True and disturbances exist, include `d ∈ R^{nd×T}`.
+            If True and disturbances exist, include `d ∈ R^{nd×T}` as an `F` input
+            and feed it to the network (core input laid out as `[u, d]`). If a
+            disturbance was declared but this is False, a RuntimeError is raised.
         casadi_opts : dict | None
             Options for `casadi.Function`. Default `{"allow_free": True, "cse": True}`.
         warmstart : {"last","last-successful"} | WarmStartStrategy = "last-successful"
@@ -607,7 +621,9 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         Raises
         ------
         RuntimeError
-            Mismatched sequence lengths; disturbances T mismatch; `model` is a casadi.Function.
+            Mismatched sequence lengths; disturbances T mismatch; disturbances
+            declared without `allow_disturbances=True`; model input width does not
+            equal `nu + nd`; `model` is a casadi.Function.
         TypeError
             `model` not callable / no `.forward`, or output not CasADi type.
 
@@ -681,6 +697,35 @@ class Mpc(NonRetroactiveWrapper[SymType]):
             lo, hi = input_clip
             u_biased = _smooth_clip(u_biased, lo, hi)
 
+        # Measured-disturbance channel(s): an extra input the LSTM was trained on,
+        # laid out as [u, d]. Built before the model call so `d` is actually fed
+        # to the network (it is an NLP parameter, not a decision variable).
+        has_disturbances = bool(list(self._disturbances.values()))
+        d_sym = None
+        if has_disturbances:
+            if not allow_disturbances:
+                raise RuntimeError(
+                    "Disturbances were declared via disturbance() but "
+                    "allow_disturbances=False. Pass allow_disturbances=True to "
+                    "set_neural_dynamics() so the model consumes `d`."
+                )
+            D = cs.vcat(self._disturbances.values())
+            nd, Td = int(D.size1()), int(D.size2())
+            if Td != T:
+                raise RuntimeError(
+                    "Disturbances should have the same sequence length as x&u."
+                )
+            n_core = int(
+                getattr(model, "n_core_inputs", getattr(model, "n_inputs", nu + nd))
+            )
+            if n_core != nu + nd:
+                raise RuntimeError(
+                    f"Model input width ({n_core}) must equal nu + nd "
+                    f"({nu} + {nd} = {nu + nd}). Train/declare the model with "
+                    "n_disturbances matching the declared disturbances."
+                )
+            d_sym = cs.MX.sym("d", nd, T)
+
         # model/wrapper call (duck-typing: __call__ or .forward)
         def _call_model(u, **kwargs):
             if hasattr(model, "__call__"):
@@ -689,7 +734,10 @@ class Mpc(NonRetroactiveWrapper[SymType]):
                 return model.forward(u, **kwargs)
             raise TypeError(" *model* is not callable nor has .forward(...)")
 
-        y_pred = _call_model(u_biased, h0=h0_list, c0=c0_list)
+        model_kwargs = {"h0": h0_list, "c0": c0_list}
+        if d_sym is not None:
+            model_kwargs["d"] = d_sym
+        y_pred = _call_model(u_biased, **model_kwargs)
         if not isinstance(y_pred, (cs.MX, cs.SX, cs.DM)):
             raise TypeError("Model output should be CasADi (MX/SX/DM).")
 
@@ -716,14 +764,7 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         # F formal inputs
         in_args = [u_sym, h0_sym, c0_sym]
         in_names = ["u", "h0", "c0"]
-        if allow_disturbances and list(self._disturbances.values()):
-            D = cs.vcat(self._disturbances.values())
-            nd, Td = int(D.size1()), int(D.size2())
-            if Td != T:
-                raise RuntimeError(
-                    "Disturbances should have the same sequence length as x&u."
-                )
-            d_sym = cs.MX.sym("d", nd, T)
+        if d_sym is not None:
             in_args.append(d_sym)
             in_names.append("d")
 
@@ -825,6 +866,7 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         ] = None,
         store_solution: bool = True,
         dynamic_pars: Union[None, dict[str, npt.ArrayLike]] = None,
+        disturbance_context: npt.ArrayLike = None,
     ) -> cs.DM:
         """
         Solve the agent's MPC and return the first control move.
@@ -896,6 +938,18 @@ class Mpc(NonRetroactiveWrapper[SymType]):
             policy; otherwise do not update `self._last_solution`.
         dynamic_pars : dict[str, array_like] or iterable of dict, optional
             A None or a dict containing all dynamic parameters (e.g. initial state measurement, biases etc.)
+        disturbance_context : array_like, optional
+            Measured-disturbance window, shape `(T_ctx, nd)`. Columns map to the
+            declared disturbances in order. The **last row** is held constant
+            across the horizon to build each declared disturbance parameter
+            `(size, T)`. An explicit `dynamic_pars={<name>: (size, T)}` forecast
+            (keyed by the disturbance's declared name) overrides the hold-constant
+            default for that disturbance.
+            - Neural mode: **required** when a disturbance was declared; the last
+              `self._n_context` rows additionally feed the numeric `(h, c)` warmup.
+            - Conventional mode: **optional** (there is no warmup, so only the last
+              row matters); when omitted you must supply the trajectory yourself
+              via `dynamic_pars[<name>]`.
 
         Returns
         -------
@@ -967,6 +1021,29 @@ class Mpc(NonRetroactiveWrapper[SymType]):
             setpoint = np.array(setpoint)
             additional_pars["SP"] = setpoint[state_indices, 0]
 
+            # Measured-disturbance (feedforward) handling. The disturbance enters
+            # both the numeric warmup (d_ctx, aligned with u_ctx/y_ctx) and the
+            # horizon parameters (one per declared disturbance, held constant by
+            # default). disturbance_context columns map to the declared
+            # disturbances in order, matching the model's [u, d] core layout.
+            d_ctx = None
+            if self._disturbances:
+                if disturbance_context is None:
+                    raise ValueError(
+                        "A disturbance was declared via disturbance(), so "
+                        "solve_mpc() requires `disturbance_context` of shape "
+                        "(T_ctx, nd)."
+                    )
+                d_full = np.asarray(disturbance_context, dtype=float)
+                if d_full.ndim == 1:
+                    d_full = d_full[:, None]
+                d_ctx = d_full[-self._n_context :, :]  # (n_ctx, nd) warmup window
+                # Hold each disturbance constant at its latest measurement over
+                # the horizon (industrial feedforward default); an explicit
+                # dynamic_pars[<name>] forecast overrides it via the pars.update
+                # below.
+                additional_pars.update(self._holdconstant_disturbance_pars(d_full))
+
             if self._lstm_model is not None:
                 # Numerical state update outside F: warmup re-estimates the
                 # context window seeded from previous (h, c); post-warmup
@@ -979,12 +1056,17 @@ class Mpc(NonRetroactiveWrapper[SymType]):
                     self._lstm_h, self._lstm_c = self._lstm_model.estimate_numeric(
                         u_ctx,
                         y_ctx,
+                        d_ctx=d_ctx,
                         h_seed=self._lstm_h,
                         c_seed=self._lstm_c,
                     )
                 else:
                     self._lstm_h, self._lstm_c = self._lstm_model.step_numeric(
-                        u_ctx[-1], y_ctx[-1], self._lstm_h, self._lstm_c
+                        u_ctx[-1],
+                        y_ctx[-1],
+                        self._lstm_h,
+                        self._lstm_c,
+                        d_step=(d_ctx[-1] if d_ctx is not None else None),
                     )
                 additional_pars["h0"] = np.concatenate(
                     [np.asarray(h).ravel() for h in self._lstm_h]
@@ -1037,6 +1119,16 @@ class Mpc(NonRetroactiveWrapper[SymType]):
             setpoint = np.array(setpoint)
             additional_pars["SP"] = setpoint
 
+            # Measured-disturbance hold-constant convenience. Conventional MPC has
+            # no warmup, so the "context" is just the latest measured disturbance
+            # (the last row): hold it constant over the horizon. Optional —
+            # passing `dynamic_pars[<name>]` directly (a full forecast) still
+            # works and overrides this via the pars.update below.
+            if self._disturbances and disturbance_context is not None:
+                additional_pars.update(
+                    self._holdconstant_disturbance_pars(disturbance_context)
+                )
+
         if input_bias is not None:
             r, c = input_bias.shape
             if r == self.na and c in (1, 0):
@@ -1082,6 +1174,42 @@ class Mpc(NonRetroactiveWrapper[SymType]):
             logger.warning("Solver failed: %s", sol.status)
 
         return u_opt
+
+    def _holdconstant_disturbance_pars(
+        self, disturbance_context: npt.ArrayLike
+    ) -> dict[str, np.ndarray]:
+        """Build per-disturbance horizon parameters held constant over the horizon.
+
+        Takes the **last row** of ``disturbance_context`` as the latest measured
+        disturbance and tiles it across the prediction horizon, producing one
+        ``(size, prediction_horizon)`` array per declared disturbance (the columns
+        of ``disturbance_context`` map to the declared disturbances in order).
+        Shared by the neural and conventional ``solve_mpc`` branches; an explicit
+        ``dynamic_pars[<name>]`` forecast overrides the result downstream.
+
+        Parameters
+        ----------
+        disturbance_context : array_like
+            Measured-disturbance window of shape ``(T_ctx, nd)`` (or ``(nd,)``);
+            only the last row is used.
+
+        Returns
+        -------
+        dict[str, np.ndarray]
+            ``{name: (size, prediction_horizon)}`` for each declared disturbance.
+        """
+        d_full = np.asarray(disturbance_context, dtype=float)
+        if d_full.ndim == 1:
+            d_full = d_full[:, None]
+        d_last = d_full[-1, :]
+        pars: dict[str, np.ndarray] = {}
+        col = 0
+        for name, d_sym in self._disturbances.items():
+            size = int(d_sym.shape[0])
+            block = d_last[col : col + size].reshape(size, 1)
+            pars[name] = np.tile(block, (1, self._prediction_horizon))
+            col += size
+        return pars
 
     def _multishooting_dynamics(self, F: cs.Function, n_in: int, n_out: int) -> None:
         """Creates step-wise dynamics equality constraints for multi-shooting.

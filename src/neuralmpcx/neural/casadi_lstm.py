@@ -390,6 +390,12 @@ class CasadiLSTM:
         Whether to use bias terms.
     proj_size : int, default 0
         Projection size P. If 0, output size equals hidden_size.
+    n_disturbances : int, default 0
+        Number of measured-disturbance (feedforward) channels `d` the model was
+        trained on. When >0 the LSTM core consumes ``n_inputs + n_disturbances``
+        features per step, laid out as ``[u, d]`` (controls first, disturbances
+        immediately after). The disturbance enters the network like the controls
+        but is an NLP parameter, not a decision variable.
 
     Attributes
     ----------
@@ -408,10 +414,14 @@ class CasadiLSTM:
         num_layers: int = 1,
         bias: bool = True,
         proj_size: int = 0,
+        n_disturbances: int = 0,
     ):
         self.n_context = n_context
         self.horizon = horizon
         self.n_inputs = n_inputs
+        self.n_disturbances = n_disturbances
+        # Full LSTM core input width: controls followed by disturbances ([u, d]).
+        self.n_core_inputs = n_inputs + n_disturbances
         self.sequence_length = horizon
         self.proj_size = proj_size
         self.hidden_size = hidden_size
@@ -421,7 +431,7 @@ class CasadiLSTM:
         self.output_size = self.h_out
 
         self._core = _CasadiLSTMCore(
-            n_inputs=n_inputs,
+            n_inputs=self.n_core_inputs,
             hidden_size=hidden_size,
             proj_size=proj_size,
             num_layers=num_layers,
@@ -440,13 +450,15 @@ class CasadiLSTM:
         """
         self._core.load_state_dict(state_dict)
 
-    def forward(self, u, *, h0, c0):
+    def forward(self, u, *, h0, c0, d=None):
         """Roll the LSTM over the prediction horizon from external h0/c0.
 
         Builds the symbolic graph by chaining single-step calls to
         `_core.step_full` for `t = 0 .. sequence_length-1`. The rollout consumes
-        the control sequence only; past outputs `y` enter exclusively through the
-        warmup helpers (`estimate_numeric`/`step_numeric`), which seed `h0`/`c0`.
+        the control sequence (and the measured-disturbance sequence `d`, when the
+        model has disturbance channels); past outputs `y` enter exclusively
+        through the warmup helpers (`estimate_numeric`/`step_numeric`), which seed
+        `h0`/`c0`. Each per-step core input is laid out as ``[u_t, d_t]``.
 
         Parameters
         ----------
@@ -455,6 +467,9 @@ class CasadiLSTM:
         h0, c0 : list of cs.MX
             Per-layer initial hidden/cell states, maintained between solves
             by `estimate_numeric`/`step_numeric`.
+        d : cs.MX, cs.DM, or torch.Tensor, optional
+            Measured-disturbance sequence with shape (n_disturbances,
+            sequence_length). Required when `n_disturbances > 0`; ignored when 0.
 
         Returns
         -------
@@ -462,22 +477,34 @@ class CasadiLSTM:
             Normalized output, shape (output_size, sequence_length).
         """
         u_cols = u.T  # (T, n_inputs); the rollout is driven by controls + h0/c0
+        if self.n_disturbances > 0:
+            if d is None:
+                raise ValueError(
+                    "forward() requires `d` when n_disturbances > 0 "
+                    f"(model has n_disturbances={self.n_disturbances})."
+                )
+            d_cols = d.T  # (T, n_disturbances)
 
         outputs = []
         h_list = list(h0)
         c_list = list(c0)
         for t in range(0, self.sequence_length):
             u_t = cs.reshape(u_cols[t, :], 1, self.n_inputs)
-            y_t, h_list, c_list = self._core.step_full(u_t, h_list, c_list)
+            if self.n_disturbances > 0:
+                d_t = cs.reshape(d_cols[t, :], 1, self.n_disturbances)
+                inp_t = cs.horzcat(u_t, d_t)  # (1, n_core_inputs), layout [u, d]
+            else:
+                inp_t = u_t
+            y_t, h_list, c_list = self._core.step_full(inp_t, h_list, c_list)
             outputs.append(y_t)  # (1, h_out)
 
         y_pred = cs.horzcat(*outputs)  # (1, horizon * h_out)
         return self._normalize_output(y_pred)
 
-    def __call__(self, u, *, h0, c0):
-        return self.forward(u, h0=h0, c0=c0)
+    def __call__(self, u, *, h0, c0, d=None):
+        return self.forward(u, h0=h0, c0=c0, d=d)
 
-    def estimate_numeric(self, u_ctx, y_ctx, h_seed=None, c_seed=None):
+    def estimate_numeric(self, u_ctx, y_ctx, d_ctx=None, h_seed=None, c_seed=None):
         """Teacher-forced numeric rollout over the context window.
 
         Executes purely numerically using `_core.step_full`. The LSTM's
@@ -486,12 +513,15 @@ class CasadiLSTM:
         cell state and higher-layer hidden states are propagated. This warmup
         (together with `step_numeric`) is the **only** place past outputs `y`
         are consumed — the symbolic prediction rollout in `forward` uses the
-        controls alone.
+        controls (and disturbances) alone. Each per-step core input is laid out
+        as ``[u_t, d_t]``.
 
         Parameters
         ----------
         u_ctx : array_like, shape (n_steps, n_inputs)
         y_ctx : array_like, shape (n_steps, h_out)
+        d_ctx : array_like, shape (n_steps, n_disturbances), optional
+            Measured-disturbance context. Required when `n_disturbances > 0`.
         h_seed, c_seed : list of np.ndarray, optional
             Per-layer initial states. Default to zeros.
 
@@ -500,6 +530,11 @@ class CasadiLSTM:
         h_new, c_new : list of np.ndarray
             Per-layer updated hidden/cell states, each (h_out,1) / (hidden_size,1).
         """
+        if self.n_disturbances > 0 and d_ctx is None:
+            raise ValueError(
+                "estimate_numeric() requires `d_ctx` when n_disturbances > 0 "
+                f"(model has n_disturbances={self.n_disturbances})."
+            )
         if h_seed is None:
             h_list = [np.zeros((self.h_out, 1)) for _ in range(self.num_layers)]
         else:
@@ -513,25 +548,32 @@ class CasadiLSTM:
 
         u_arr = np.asarray(u_ctx, dtype=float)
         y_arr = np.asarray(y_ctx, dtype=float)
+        d_arr = np.asarray(d_ctx, dtype=float) if self.n_disturbances > 0 else None
         n = u_arr.shape[0]
         for i in range(n):
             u_t = u_arr[i].reshape(1, self.n_inputs)
+            if self.n_disturbances > 0:
+                d_t = d_arr[i].reshape(1, self.n_disturbances)
+                inp_t = np.hstack([u_t, d_t])  # (1, n_core_inputs), layout [u, d]
+            else:
+                inp_t = u_t
             y_t = y_arr[i].reshape(self.h_out, 1)
             # Teacher forcing on layer 0
             h_list = [y_t] + h_list[1:]
-            _, h_list, c_list = self._core.step_full(u_t, h_list, c_list)
+            _, h_list, c_list = self._core.step_full(inp_t, h_list, c_list)
 
         h_np = [np.asarray(h).reshape(self.h_out, 1) for h in h_list]
         c_np = [np.asarray(c).reshape(self.hidden_size, 1) for c in c_list]
         return h_np, c_np
 
-    def step_numeric(self, u_step, y_step, h_prev, c_prev):
+    def step_numeric(self, u_step, y_step, h_prev, c_prev, d_step=None):
         """Advance the LSTM one numeric step using teacher forcing.
 
         Used between MPC solves to advance the persisted (h, c) buffers
-        with the latest measured `(u, y)`. Teacher forcing replaces the
-        layer-0 hidden state with `y_step` so the measurement directly
-        corrects the LSTM's memory.
+        with the latest measured `(u, y)` (and disturbance `d`). Teacher forcing
+        replaces the layer-0 hidden state with `y_step` so the measurement
+        directly corrects the LSTM's memory. The per-step core input is laid out
+        as ``[u_step, d_step]``.
 
         Parameters
         ----------
@@ -539,17 +581,29 @@ class CasadiLSTM:
         y_step : array_like, shape (h_out,)
         h_prev, c_prev : list of np.ndarray
             Per-layer previous states.
+        d_step : array_like, shape (n_disturbances,), optional
+            Measured disturbance at this step. Required when `n_disturbances > 0`.
 
         Returns
         -------
         h_new, c_new : list of np.ndarray
         """
+        if self.n_disturbances > 0 and d_step is None:
+            raise ValueError(
+                "step_numeric() requires `d_step` when n_disturbances > 0 "
+                f"(model has n_disturbances={self.n_disturbances})."
+            )
         h_list = [np.asarray(h, dtype=float).reshape(self.h_out, 1) for h in h_prev]
         c_list = [np.asarray(c, dtype=float).reshape(self.hidden_size, 1) for c in c_prev]
         u_t = np.asarray(u_step, dtype=float).reshape(1, self.n_inputs)
+        if self.n_disturbances > 0:
+            d_t = np.asarray(d_step, dtype=float).reshape(1, self.n_disturbances)
+            inp_t = np.hstack([u_t, d_t])  # (1, n_core_inputs), layout [u, d]
+        else:
+            inp_t = u_t
         y_t = np.asarray(y_step, dtype=float).reshape(self.h_out, 1)
         h_list = [y_t] + h_list[1:]
-        _, h_new, c_new = self._core.step_full(u_t, h_list, c_list)
+        _, h_new, c_new = self._core.step_full(inp_t, h_list, c_list)
         h_np = [np.asarray(h).reshape(self.h_out, 1) for h in h_new]
         c_np = [np.asarray(c).reshape(self.hidden_size, 1) for c in c_new]
         return h_np, c_np
