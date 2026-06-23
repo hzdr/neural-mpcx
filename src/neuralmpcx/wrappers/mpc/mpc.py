@@ -511,10 +511,11 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         ``set_neural_dynamics(allow_disturbances=True)`` opt-in is required. In
         the **conventional** mode the columns index the step dynamics
         ``F(x_k, u_k, d_k)``. In **both** modes ``solve_mpc`` can hold the latest
-        measurement constant across all columns by default (pass
-        ``disturbance_context``; in conventional mode only its last row is used,
-        since there is no warmup), and an explicit
-        ``dynamic_pars={<name>: (size, T)}`` forecast overrides it.
+        measurement constant across all columns by default — pass it via
+        ``disturbance_context`` in neural mode (its last ``n_context`` rows also
+        feed the warmup) or via ``disturbance`` in conventional mode (the latest
+        measurement). An explicit ``dynamic_pars={<name>: (size, T)}`` forecast
+        overrides it.
 
         Parameters
         ----------
@@ -855,10 +856,10 @@ class Mpc(NonRetroactiveWrapper[SymType]):
 
     def solve_mpc(
         self,
-        state: Union[npt.ArrayLike, dict[str, npt.ArrayLike]],
-        state_context: npt.ArrayLike,
-        state_indices: npt.ArrayLike,
-        action_context: npt.ArrayLike,
+        state: Union[None, npt.ArrayLike, dict[str, npt.ArrayLike]] = None,
+        state_context: npt.ArrayLike = None,
+        state_indices: npt.ArrayLike = None,
+        action_context: npt.ArrayLike = None,
         setpoint: npt.ArrayLike = None,  # Added the dynamic setpoint functionality
         input_bias: npt.ArrayLike = None,
         vals0: Union[
@@ -867,57 +868,76 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         store_solution: bool = True,
         dynamic_pars: Union[None, dict[str, npt.ArrayLike]] = None,
         disturbance_context: npt.ArrayLike = None,
+        disturbance: npt.ArrayLike = None,
     ) -> cs.DM:
         """
         Solve the agent's MPC and return the first control move.
 
-        This assembles the parameter dictionary (state/context, action context,
-        set-point, optional input bias, and tuning parameters), warm-starts the
-        underlying NLP when possible, calls `self.solve(...)`, and returns the
+        This assembles the parameter dictionary (initial state/action, set-point,
+        optional input bias, disturbances, and tuning parameters), warm-starts
+        the underlying NLP when possible, calls `self.solve(...)`, and returns the
         first control input as a `casadi.DM`.
+
+        The required inputs differ by mode. **Neural** mode is driven by the
+        rolling context windows (`state_context`, `action_context`, and, when a
+        disturbance is declared, `disturbance_context`) which feed the LSTM
+        warmup; `state` is ignored. **Conventional** mode has no warmup, so it
+        only needs the latest `state` and the previously applied action; the
+        context windows are not used (pass `disturbance` for the latest measured
+        disturbance instead of `disturbance_context`). `state_indices` is
+        required in both modes.
 
         Behavior by mode
         ----------------
         - Neural mode (`self._neural is True`):
-          * Builds state parameter `x0` from the **last** step of 
-          `state_context[:, state_indices]`.
-          * Provides the first action parameter `u0` from the last
-            step of `action_context`.
+          * Builds state parameter `x0` from the **last** row of
+            `state_context[:, state_indices]`.
+          * Provides the first action parameter `u0` from the **last** row of
+            `action_context`.
           * Updates the persisted LSTM `(h, c)` numerically using the **last**
             `self._n_context` rows of `state_context`/`action_context` (the
             warmup window), and passes them as the `h0`/`c0` parameters.
           * Sets the set-point parameter `SP` to `setpoint[state_indices, 0]`.
+          * Holds `disturbance_context` constant over the horizon (required when
+            a disturbance was declared); its last `self._n_context` rows also
+            feed the warmup.
           * Returns the control at column 0 of the solved action
             trajectory (the receding-horizon action applied now).
         - Non-neural mode (`self._neural is False`):
-          * Builds initial state blocks directly from `state[state_indices]`
+          * Builds initial state blocks `x0` directly from `state[state_indices]`
             (accepts array-like or dict-of-arrays).
+          * Provides the first action parameter `u0` from `self._last_action`
+            (the previously applied move), falling back to zeros on the first
+            solve.
           * Sets the set-point parameter `SP` to `setpoint` as given.
+          * Holds `disturbance` constant over the horizon (optional).
           * Returns the control at column `0` of the solved action trajectory.
 
         Parameters
         ----------
-        state : array_like or dict[str, array_like]
-            Current full state used **only in non-neural mode**. If an array,
-            it must index with `state_indices`. If a dict, values are stacked in
-            the order of `self.initial_states.keys()`.
-        state_context : array_like, shape (T_ctx, N_full)
-            Rolling window of measured states. The last `self._n_context` rows feed
-            the numeric `(h, c)` warmup; the last row builds the
-            `x0` parameter. Columns are filtered with `state_indices` to match
-            the internal MPC state ordering (sum of block sizes in
-            `self.initial_states`).
+        state : array_like or dict[str, array_like], optional
+            Current full state. **Required in non-neural mode, ignored in neural
+            mode** (where `state_context[-1]` is the latest measurement). If an
+            array, it is indexed with `state_indices`. If a dict, values are
+            stacked in the order of `self.initial_states.keys()`.
+        state_context : array_like, shape (T_ctx, N_full), optional
+            Rolling window of measured states. **Required in neural mode** (unused
+            in conventional mode). The last `self._n_context` rows feed the
+            numeric `(h, c)` warmup; the last row builds the `x0` parameter.
+            Columns are filtered with `state_indices` to match the internal MPC
+            state ordering (sum of block sizes in `self.initial_states`).
         state_indices : array_like of int, shape (nx_sel,)
             Indices mapping from the **full** state vector to the subset/order
             used by the MPC (`self.initial_states`). Length must equal the total
-            state size expected by the MPC.
-        action_context : array_like
-            Recent control history. Accepted shapes:
+            state size expected by the MPC. Required in both modes.
+        action_context : array_like, optional
+            Recent control history. **Required in neural mode** (unused in
+            conventional mode, where `u0` comes from `self._last_action`).
+            Accepted shapes:
             - `(T_ctx, na)` or `(na, T_ctx)` for multi-input,
             - `(T_ctx,)` for single-input.
             The last `self._n_context` steps feed the numeric `(h, c)` warmup; the
-            last step build the `u0` parameter with shape
-            `(na, 1)`.
+            last step builds the `u0` parameter with shape `(na, 1)`.
         setpoint : array_like, optional
             Target output/set-point. In neural mode, only
             `setpoint[state_indices, 0]` is consumed (i.e., first column for the
@@ -939,17 +959,23 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         dynamic_pars : dict[str, array_like] or iterable of dict, optional
             A None or a dict containing all dynamic parameters (e.g. initial state measurement, biases etc.)
         disturbance_context : array_like, optional
-            Measured-disturbance window, shape `(T_ctx, nd)`. Columns map to the
-            declared disturbances in order. The **last row** is held constant
-            across the horizon to build each declared disturbance parameter
-            `(size, T)`. An explicit `dynamic_pars={<name>: (size, T)}` forecast
-            (keyed by the disturbance's declared name) overrides the hold-constant
-            default for that disturbance.
-            - Neural mode: **required** when a disturbance was declared; the last
-              `self._n_context` rows additionally feed the numeric `(h, c)` warmup.
-            - Conventional mode: **optional** (there is no warmup, so only the last
-              row matters); when omitted you must supply the trajectory yourself
-              via `dynamic_pars[<name>]`.
+            Measured-disturbance window for **neural mode only**, shape
+            `(T_ctx, nd)`. Columns map to the declared disturbances in order. The
+            **last row** is held constant across the horizon to build each
+            declared disturbance parameter `(size, T)`, and the last
+            `self._n_context` rows additionally feed the numeric `(h, c)` warmup.
+            **Required in neural mode when a disturbance was declared.** An
+            explicit `dynamic_pars={<name>: (size, T)}` forecast (keyed by the
+            disturbance's declared name) overrides the hold-constant default.
+            Ignored in conventional mode (use `disturbance` there).
+        disturbance : array_like, optional
+            Latest measured disturbance for **conventional mode only**, shape
+            `(nd,)` or `(1, nd)` (columns map to the declared disturbances in
+            order). Held constant across the horizon to build each declared
+            disturbance parameter `(size, T)`. Optional: when omitted you must
+            supply the trajectory yourself via `dynamic_pars[<name>]`, which also
+            overrides the hold-constant default. Ignored in neural mode (use
+            `disturbance_context` there).
 
         Returns
         -------
@@ -969,8 +995,19 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         Raises
         ------
         ValueError
-            If `input_bias` does not have shape `(na, 1)` (or broadcastable).
+            If `state_indices` is not given; if neural mode is missing
+            `state_context`/`action_context`; if conventional mode is missing
+            `state`; or if `input_bias` does not have shape `(na, 1)`.
         """
+        if state_indices is None:
+            raise ValueError("solve_mpc() requires `state_indices`.")
+        if self._neural:
+            if state_context is None or action_context is None:
+                raise ValueError(
+                    "Neural MPC requires `state_context` and `action_context`."
+                )
+        elif state is None:
+            raise ValueError("Conventional MPC requires `state`.")
 
         if self._neural:
             mpcstates = self.initial_states
@@ -1098,21 +1135,19 @@ class Mpc(NonRetroactiveWrapper[SymType]):
                     states = np.split(selected_states, cumsizes)
                 x0_dict = dict(zip(mpcstates.keys(), states))
 
-            _action_context = np.array(action_context).copy()
-
-            if _action_context.shape[1] == 1:  # Case: Lists with single elements
-                _action_context = _action_context.flatten()[
-                    np.newaxis, :
-                ]  # Convert to a single row
-            else:  # Case: Two-element or multi-element lists
-                _action_context = (
-                    _action_context.T
-                )  # Transpose to get 2 rows and multiple columns
+            # Conventional MPC has no warmup, so `u0` is just the previously
+            # applied move (`self._last_action`, shape (na, 1)). On the first
+            # solve there is no last action yet, so default to zeros — this
+            # matches seeding an action history with zeros.
+            if self._last_action is not None:
+                last_u = np.asarray(self._last_action, dtype=float).reshape(self.na, 1)
+            else:
+                last_u = np.zeros((self.na, 1))
             if len(mpcactions) == 1:
-                actions = (_action_context.reshape(1, -1),)
+                actions = (last_u,)
             else:
                 cumsizes = np.cumsum([a.shape[0] for a in mpcactions.values()][:-1])
-                actions = np.split(_action_context, cumsizes)
+                actions = np.split(last_u, cumsizes, axis=0)
             additional_pars = x0_dict
             u0_dict = dict(zip(mpcactions.keys(), actions))
             additional_pars.update(u0_dict)
@@ -1120,14 +1155,15 @@ class Mpc(NonRetroactiveWrapper[SymType]):
             additional_pars["SP"] = setpoint
 
             # Measured-disturbance hold-constant convenience. Conventional MPC has
-            # no warmup, so the "context" is just the latest measured disturbance
-            # (the last row): hold it constant over the horizon. Optional —
-            # passing `dynamic_pars[<name>]` directly (a full forecast) still
-            # works and overrides this via the pars.update below.
-            if self._disturbances and disturbance_context is not None:
-                additional_pars.update(
-                    self._holdconstant_disturbance_pars(disturbance_context)
-                )
+            # no warmup, so the disturbance is just the latest measurement: hold
+            # it constant over the horizon. Optional — passing `dynamic_pars[<name>]`
+            # directly (a full forecast) still works and overrides this via the
+            # pars.update below.
+            if self._disturbances and disturbance is not None:
+                d_meas = np.asarray(disturbance, dtype=float)
+                if d_meas.ndim == 1:
+                    d_meas = d_meas[np.newaxis, :]  # (nd,) -> (1, nd) single measurement
+                additional_pars.update(self._holdconstant_disturbance_pars(d_meas))
 
         if input_bias is not None:
             r, c = input_bias.shape

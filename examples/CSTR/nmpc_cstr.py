@@ -848,13 +848,6 @@ if __name__ == "__main__":
     X, U, SP, X_pred = [state], [], [], []
     X_est = [ekf.x_est.flatten()] if USE_EKF else []
     Y_MEAS = []
-    if WARMUP_TYPE == "X0":
-        state_context = np.tile(
-            np.asarray(state_fb).reshape(1, -1), (1, 1)
-        )
-    else:
-        state_context = np.zeros((1, CSTRSystem.nx))
-    action_context = np.zeros((1, CSTRSystem.nu))
 
     exec_times_ms = []
 
@@ -875,14 +868,12 @@ if __name__ == "__main__":
 
                 t0 = time.perf_counter()
                 u_opt = mpc.solve_mpc(
-                    state_fb,
-                    state_context,
-                    state_indices,
-                    action_context,
-                    sp,
-                    input_bias,
-                    vals0,
-                    store_solution
+                    state=state_fb,
+                    state_indices=state_indices,
+                    setpoint=sp,
+                    input_bias=input_bias,
+                    vals0=vals0,
+                    store_solution=store_solution,
                 )
                 t1 = time.perf_counter()
 
@@ -899,13 +890,6 @@ if __name__ == "__main__":
                     Y_MEAS.append(np.asarray(y_meas).flatten())
                 else:
                     state_fb = obs
-
-                state_context = np.vstack(
-                    [state_context, np.asarray(state_fb).reshape(1, -1)]
-                )[-1 :]
-                action_context = np.vstack([action_context, np.asarray(u_opt).T])[
-                    -1 :
-                ]
 
                 if mpc._last_solution is not None:
                     if _SHOOTING == "single":

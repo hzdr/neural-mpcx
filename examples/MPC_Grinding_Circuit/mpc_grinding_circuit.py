@@ -381,11 +381,6 @@ if __name__ == "__main__":
     y, info = env.reset(seed=mk_seed(rng))
 
     state = kf.x_est
-    if NtiSystem.meas_state_directly:
-        state_context = np.tile(state.T, (mpc.n_context, 1))
-    else:
-        state_context = np.zeros((mpc.n_context, NtiSystem.ny))
-    action_context = np.zeros((mpc.n_context, NtiSystem.nu))
 
     X_true, X_est, Y, U, SP = [info["x"]], [state], [y], [], []
     DU_BIAS, DY_BIAS = [], []
@@ -400,8 +395,9 @@ if __name__ == "__main__":
             dynamic_pars = kf.get_mpc_biases()
 
             dev_u_opt = mpc.solve_mpc(
-                state, state_context, state_indices, action_context,
-                setpoint, input_bias, vals0, store_solution, dynamic_pars)
+                state=state, state_indices=state_indices, setpoint=setpoint,
+                input_bias=input_bias, vals0=vals0, store_solution=store_solution,
+                dynamic_pars=dynamic_pars)
 
             dev_u_opt_np = np.array(dev_u_opt.full(), dtype=np.float64).reshape(-1, 1)
             u_opt = dev_u_opt_np + LinearMpc.u_offset
@@ -410,9 +406,7 @@ if __name__ == "__main__":
             kf.predict(dev_u_opt_np)
             kf.update(y - LinearMpc.y_offset, dev_u_opt_np)
 
-            state         = kf.x_est
-            state_context = state.T
-            action_context = dev_u_opt_np.T
+            state = kf.x_est
 
             X_true.append(info["x"])
             X_est.append(state)

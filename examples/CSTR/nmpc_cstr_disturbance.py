@@ -879,16 +879,9 @@ if __name__ == "__main__":
     X, U, SP, X_pred = [state], [], [], []
     X_est = [ekf.x_est.flatten()] if USE_EKF else []
     Y_MEAS = []
-    if WARMUP_TYPE == "X0":
-        state_context = np.tile(
-            np.asarray(state_fb).reshape(1, -1), (1, 1)
-        )
-    else:
-        state_context = np.zeros((1, CSTRSystem.nx))
-    action_context = np.zeros((1, NMPC.n_inputs))  # F history (controls)
     # Q_dot is the measured disturbance, held constant at its fixed value. With
-    # no warmup, only the latest measurement (last row) is used by solve_mpc.
-    disturbance_context = np.full((1, NMPC.n_disturbances), Q_DOT_FIXED_NORM)
+    # no warmup, solve_mpc only needs the latest measurement (held over horizon).
+    disturbance = np.full((NMPC.n_disturbances,), Q_DOT_FIXED_NORM)
 
     exec_times_ms = []
 
@@ -909,15 +902,13 @@ if __name__ == "__main__":
 
                 t0 = time.perf_counter()
                 u_opt = mpc.solve_mpc(
-                    state_fb,
-                    state_context,
-                    state_indices,
-                    action_context,
-                    sp,
-                    input_bias,
-                    vals0,
-                    store_solution,
-                    disturbance_context=disturbance_context,
+                    state=state_fb,
+                    state_indices=state_indices,
+                    setpoint=sp,
+                    input_bias=input_bias,
+                    vals0=vals0,
+                    store_solution=store_solution,
+                    disturbance=disturbance,
                 )
                 t1 = time.perf_counter()
 
@@ -940,13 +931,7 @@ if __name__ == "__main__":
                 else:
                     state_fb = obs
 
-                state_context = np.vstack(
-                    [state_context, np.asarray(state_fb).reshape(1, -1)]
-                )[-1 :]
-                action_context = np.vstack(
-                    [action_context, np.asarray(u_opt).reshape(1, NMPC.n_inputs)]
-                )[-1 :]
-                # disturbance_context stays constant (Q_dot fixed measurement).
+                # disturbance stays constant (Q_dot fixed measurement).
 
                 if mpc._last_solution is not None:
                     if _SHOOTING == "single":

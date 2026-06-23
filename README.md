@@ -150,7 +150,8 @@ for t in range(T):
     kf.update(y=y_measured - y_offset)
 
     # Pass bias estimates directly to MPC
-    u_opt = mpc.solve_mpc(..., dynamic_pars=kf.get_mpc_biases())
+    u_opt = mpc.solve_mpc(state=x_est, state_indices=state_indices,
+                          dynamic_pars=kf.get_mpc_biases())
 ```
 
 The `AugmentedKalmanFilter` estimates plant state, input bias, and output bias at the same time, so you get offset-free MPC tracking even with plant-model mismatch.
@@ -176,7 +177,7 @@ ekf = ExtendedKalmanFilter(
 
 # In MPC loop
 for t in range(T):
-    u_opt = mpc.solve_mpc(ekf.x_est, ...)  # feed the estimate, not the true state
+    u_opt = mpc.solve_mpc(state=ekf.x_est, state_indices=state_indices, ...)  # feed the estimate, not the true state
     y_meas = plant.measure()
     ekf.predict(u=u_opt)
     ekf.update(y=y_meas)
@@ -251,7 +252,7 @@ mpc.set_neural_dynamics(model=model, n_warmup=1)
 
 ### Measured disturbances (feedforward)
 
-A *measured disturbance* (feedforward variable) is an exogenous input you can measure but not manipulate. NeuralMPCX supports it in **both** the conventional and neural paths: declare it with `mpc.disturbance(name, size)` and it becomes a `(size, prediction_horizon)` NLP **parameter** that feeds the prediction model. At solve time `solve_mpc()` accepts a `disturbance_context` and, by default, **holds the latest measured disturbance constant** across the prediction horizon (the industrial feedforward behavior); pass an explicit forecast via `dynamic_pars={<name>: (size, T)}` to override it.
+A *measured disturbance* (feedforward variable) is an exogenous input you can measure but not manipulate. NeuralMPCX supports it in **both** the conventional and neural paths: declare it with `mpc.disturbance(name, size)` and it becomes a `(size, prediction_horizon)` NLP **parameter** that feeds the prediction model. At solve time `solve_mpc()` **holds the latest measured disturbance constant** across the prediction horizon by default (the industrial feedforward behavior). How you supply that measurement differs by mode: neural MPC takes a rolling `disturbance_context` window (it also feeds the LSTM warmup), while conventional MPC takes a single `disturbance` (the latest measurement). In either case, pass an explicit forecast via `dynamic_pars={<name>: (size, T)}` to override the hold-constant default.
 
 **Neural MPC.** If you trained the LSTM on the disturbance channel `d` (input columns ordered `[u, d]`), pass `n_disturbances` to the model and `allow_disturbances=True` to `set_neural_dynamics`; the rollout then consumes `d` like the controls (`d` is a parameter, not a decision variable). Because the LSTM is stateful, `d` must also enter the numeric warmup, so here `disturbance_context` is a rolling window `(n_context, nd)` mirroring `state_context`/`action_context` (its last `n_context` rows seed `h0`/`c0`).
 
@@ -266,19 +267,20 @@ mpc.disturbance("d", size=nd)                        # (nd, prediction_horizon) 
 mpc.set_neural_dynamics(model=model, allow_disturbances=True, n_warmup=1)
 
 # hold-constant default (no dynamic_pars["d"] needed)
-u_opt = mpc.solve_mpc(state, state_context, state_indices, action_context,
-                      setpoint, disturbance_context=d_ctx)   # d_ctx: (n_context, nd)
+u_opt = mpc.solve_mpc(state_context=state_context, state_indices=state_indices,
+                      action_context=action_context, setpoint=setpoint,
+                      disturbance_context=d_ctx)   # d_ctx: (n_context, nd)
 ```
 
-**Conventional MPC.** The disturbance is wired into the step dynamics `F(x_k, u_k, d_k)`. There is no warmup, so the "context" is just the latest measurement — only the **last row** of `disturbance_context` is used. It is optional: you may instead supply the full trajectory yourself via `dynamic_pars[<name>]`.
+**Conventional MPC.** The disturbance is wired into the step dynamics `F(x_k, u_k, d_k)`. There is no warmup, so you just pass the latest measurement as `disturbance`. It is optional: you may instead supply the full trajectory yourself via `dynamic_pars[<name>]`.
 
 ```python
 mpc.disturbance("d", size=nd)                        # (nd, prediction_horizon) parameter
 mpc.set_dynamics(F)                                  # F(x, u, d) -> x_next
 
 # hold the latest measured disturbance constant over the horizon
-u_opt = mpc.solve_mpc(state, state_context, state_indices, action_context,
-                      setpoint, disturbance_context=d_meas)  # d_meas: (1, nd)
+u_opt = mpc.solve_mpc(state=state, state_indices=state_indices,
+                      setpoint=setpoint, disturbance=d_meas)  # d_meas: (nd,)
 ```
 
 ## Project Structure

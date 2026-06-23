@@ -792,14 +792,13 @@ if __name__ == "__main__":
 
                 t0 = time.perf_counter()
                 u_opt = mpc.solve_mpc(
-                    state,
-                    state_context,
-                    state_indices,
-                    action_context,
-                    sp,
-                    input_bias,
-                    vals0,
-                    store_solution,
+                    state_context=state_context,
+                    state_indices=state_indices,
+                    action_context=action_context,
+                    setpoint=sp,
+                    input_bias=input_bias,
+                    vals0=vals0,
+                    store_solution=store_solution,
                     disturbance_context=disturbance_context,
                 )
                 t1 = time.perf_counter()
