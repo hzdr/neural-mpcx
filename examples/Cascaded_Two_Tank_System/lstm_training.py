@@ -183,8 +183,8 @@ def compute_loss(y_sim, y_true, n_context, num_outputs, y_box_lo, y_box_hi):
 
     The sequence is divided at ``n_context``:
 
-    * ``[n_context:]`` is the free-running **prediction** region -- this is the
-      mean-squared error the controller ultimately cares about (``L_mse``).
+    * ``[n_context:]`` is the free-running **prediction** region: the
+      mean-squared error that matters for control (``L_mse``).
     * ``[:n_context]`` is the teacher-forced **warmup** region whose output is
       penalised by a state-consistency term (``L_reg``), the analogue of the
       Forgione & Piga regularization that keeps the estimated ``(h0, c0)``
@@ -299,11 +299,31 @@ def build_lstm(n_inputs, n_outputs, *, batch_size, sequence_length, device):
 
 def _epoch_loss(model, loader, num_features, num_outputs, y_box_lo, y_box_hi,
                 device, optimizer=None):
-    """Run one epoch; trains when ``optimizer`` is given, else evaluates."""
+    """Run one epoch; trains when ``optimizer`` is given, else evaluates.
+
+    On the training pass it also gathers the lightweight health diagnostics
+    borrowed from Karpathy's "makemore part 3" lecture and returns them as a
+    dict; the evaluation pass returns ``None`` for the diagnostics. Returns
+    ``(avg_loss, diag)``.
+
+    * ``ud_ratio`` -- update-to-data ratio, ``log10(|ΔW| / |W|)`` averaged over
+      parameters. makemore targets ~1e-3 (i.e. -3). We use the SGD-equivalent
+      step ``LR * grad`` as the proxy ``ΔW``; with Adam the realised step is
+      not exactly ``LR * grad``, but the ~1e-3 scale still flags an init/LR that
+      moves the weights too little or too much.
+    * ``grad_norm`` -- global pre-clip gradient norm (the value
+      ``clip_grad_norm_`` returns); compare against the ``max_norm`` threshold.
+    * ``sat_pct`` -- LSTM cell-state saturation, the fraction of ``|tanh(c)|``
+      above 0.97. A high value signals a vanishing-gradient regime in the
+      recurrence. (``nn.LSTM`` hides the true gate activations, so the exposed
+      cell state ``model.cn`` is used as the closest available proxy.)
+    """
     training = optimizer is not None
     model.train(training)
     total = 0.0
     seq_len = model.sequence_length
+    ud_sum = grad_norm_sum = sat_sum = 0.0
+    n_steps = 0
     context = torch.enable_grad if training else torch.no_grad
     with context():
         for u_batch, y_batch in loader:
@@ -318,10 +338,34 @@ def _epoch_loss(model, loader, num_features, num_outputs, y_box_lo, y_box_hi,
             if training:
                 optimizer.zero_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), max_norm=5.0
+                )
+                with torch.no_grad():
+                    ratios = [
+                        (LR * p.grad).std().div(p.data.std() + 1e-12).log10().item()
+                        for p in model.parameters()
+                        if p.grad is not None and p.numel() > 1
+                    ]
+                    ud_sum += float(np.mean(ratios)) if ratios else 0.0
+                    grad_norm_sum += float(grad_norm)
+                    if model.cn is not None:
+                        sat_sum += (
+                            (model.cn.detach().tanh().abs() > 0.97).float().mean()
+                            .item() * 100.0
+                        )
+                    n_steps += 1
                 optimizer.step()
             total += loss.item()
-    return total / len(loader)
+    avg = total / len(loader)
+    if not training:
+        return avg, None
+    diag = {
+        "ud_ratio": ud_sum / max(n_steps, 1),
+        "grad_norm": grad_norm_sum / max(n_steps, 1),
+        "sat_pct": sat_sum / max(n_steps, 1),
+    }
+    return avg, diag
 
 
 def train_lstm(model, train_loader, val_loader, num_features, num_outputs, device):
@@ -350,6 +394,7 @@ def train_lstm(model, train_loader, val_loader, num_features, num_outputs, devic
         ).to(device)
 
     train_loss, val_loss, lr_history = [], [], []
+    ud_history, grad_norm_history, sat_history = [], [], []
     best_val_loss = float("inf")
     best_state = None
     patience_counter = 0
@@ -357,13 +402,16 @@ def train_lstm(model, train_loader, val_loader, num_features, num_outputs, devic
     start = time.time()
     with tqdm(total=NUM_ITER, desc="Training", unit="epoch") as pbar:
         for itr in range(NUM_ITER):
-            tr = _epoch_loss(model, train_loader, num_features, num_outputs,
-                             y_box_lo, y_box_hi, device, optimizer=optimizer)
-            va = _epoch_loss(model, val_loader, num_features, num_outputs,
-                             y_box_lo, y_box_hi, device, optimizer=None)
+            tr, diag = _epoch_loss(model, train_loader, num_features, num_outputs,
+                                   y_box_lo, y_box_hi, device, optimizer=optimizer)
+            va, _ = _epoch_loss(model, val_loader, num_features, num_outputs,
+                                y_box_lo, y_box_hi, device, optimizer=None)
             train_loss.append(tr)
             val_loss.append(va)
             lr_history.append(optimizer.param_groups[0]["lr"])
+            ud_history.append(diag["ud_ratio"])
+            grad_norm_history.append(diag["grad_norm"])
+            sat_history.append(diag["sat_pct"])
 
             if scheduler is not None:
                 scheduler.step(va)
@@ -372,6 +420,7 @@ def train_lstm(model, train_loader, val_loader, num_features, num_outputs, devic
             pbar.set_postfix({
                 "train": f"{tr:.5f}", "val": f"{va:.5f}",
                 "lr": f"{optimizer.param_groups[0]['lr']:.2e}",
+                "u:d": f"{diag['ud_ratio']:.2f}",
                 "patience": patience_counter,
             })
 
@@ -392,6 +441,8 @@ def train_lstm(model, train_loader, val_loader, num_features, num_outputs, devic
     print(f"\nTraining time: {time.time() - start:.2f}s")
     return {
         "train_loss": train_loss, "val_loss": val_loss, "lr_history": lr_history,
+        "ud_history": ud_history, "grad_norm_history": grad_norm_history,
+        "sat_history": sat_history,
         "best_val_loss": best_val_loss, "best_state": best_state,
     }
 
@@ -559,6 +610,54 @@ def plot_loss_curve(history):
     return fig
 
 
+def plot_diagnostics(history):
+    """Training-health diagnostics, after Karpathy's "makemore part 3" lecture.
+
+    Three stacked panels vs. epoch:
+
+    * **update-to-data ratio** (``log10``) with the ~1e-3 (= -3) health line --
+      below it the weights barely move (init/LR too small), well above it the
+      steps are large and noisy;
+    * **pre-clip gradient norm** (log scale) with the ``max_norm`` clip
+      threshold marked -- shows how often clipping actually bites;
+    * **cell-state saturation** (% of ``|tanh(c)| > 0.97``) -- a rising trace
+      warns of a vanishing-gradient regime in the recurrence.
+    """
+    ud = history["ud_history"]
+    gn = history["grad_norm_history"]
+    sat = history["sat_history"]
+    epochs = np.arange(len(ud))
+
+    fig, axes = plt.subplots(3, 1, figsize=(8, 7), sharex=True)
+    fig.suptitle("Training diagnostics", fontsize=11, fontweight="bold")
+
+    axes[0].plot(epochs, ud, color=COLOR_PRED, linewidth=1.2,
+                 label="update:data ratio")
+    axes[0].axhline(-3, color=COLOR_REAL, linestyle="--", linewidth=0.9,
+                    label="healthy $\\approx$ 1e-3")
+    axes[0].set_ylabel("log10 update:data")
+    _style_axes(axes[0])
+
+    axes[1].semilogy(epochs, gn, color=COLOR_PRED, linewidth=1.2,
+                     label="grad norm (pre-clip)")
+    axes[1].axhline(5.0, color=COLOR_CTX, linestyle="--", linewidth=0.9,
+                    label="clip max_norm")
+    axes[1].set_ylabel("grad norm")
+    axes[1].legend(loc="best", fontsize=7, framealpha=0.9)
+    axes[1].grid(True, which="major", alpha=0.3)
+    axes[1].xaxis.set_minor_locator(AutoMinorLocator())  # y-axis is log
+
+    axes[2].plot(epochs, sat, color=COLOR_PRED, linewidth=1.2,
+                 label="$|\\tanh(c)| > 0.97$")
+    axes[2].set_ylabel("cell saturation [%]")
+    axes[2].set_xlabel("epoch")
+    _style_axes(axes[2])
+
+    fig.tight_layout()
+    fig.subplots_adjust(top=0.93)
+    return fig
+
+
 def plot_fit(y_true, y_sim, u, r2, rmse, title):
     """Ground truth vs. simulation per output (+ inputs), annotated with R^2/RMSE."""
     n_out, n_in = y_true.shape[1], u.shape[1]
@@ -650,6 +749,7 @@ def main():
     plot_dataset(u_est, y_est, u_test, y_test, split_idx)
     if history is not None:
         plot_loss_curve(history)
+        plot_diagnostics(history)
     plot_context_window(y_est, u_est, N_CONTEXT, zoom_len=WINDOW_SIZE,
                         y_sim=y_sim_train,
                         title="Context-window warmup (estimation data)")

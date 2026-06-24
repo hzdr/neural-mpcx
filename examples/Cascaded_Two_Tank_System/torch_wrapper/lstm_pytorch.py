@@ -79,6 +79,13 @@ class LSTM(nn.Module):
                 # Initialize biases to zero
                 nn.init.constant_(param, 0)
 
+        # Forget-gate bias = 1.0 to encourage retaining cell memory early in
+        # training (Jozefowicz et al. 2015). PyTorch packs the gate biases in the
+        # order [i, f, g, o], so the forget slice is [hidden_size:2*hidden_size].
+        # Setting it on bias_ih_l0 alone suffices (effective bias = bias_ih + bias_hh).
+        #H = self.hidden_size
+        #self.model.bias_ih_l0.data[H:2 * H].fill_(1.0)
+
     def forward(self, u_train):
         """Forward pass through LSTM with context-based state estimation.
 
