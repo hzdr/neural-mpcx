@@ -1,4 +1,7 @@
-# Copyright 2024-2026 Ênio Lopes Júnior
+# Copyright 2024-2026 Helmholtz-Zentrum Dresden-Rossendorf e.V. (HZDR)
+# Authors:
+# - Ênio Lopes Júnior
+# - Sebastian Felix Reinecke
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
