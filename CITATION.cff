@@ -1,12 +1,12 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 title: "NeuralMPCX: A Model Predictive Control library that supports classic MPC and neural MPC with CasADi"
-version: "3.0.0"
+version: "3.0.1"
 license: Apache-2.0
 repository-code: "https://github.com/hzdr/neural-mpcx"
 url: "https://github.com/hzdr/neural-mpcx"
 doi: "10.14278/rodare.4734"
-date-released: 2026-06-24
+date-released: 2026-06-26
 authors:
   - family-names: "Lopes Júnior"
     given-names: "Ênio"

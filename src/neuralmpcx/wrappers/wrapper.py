@@ -1,13 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright 2024-2026 Helmholtz-Zentrum Dresden-Rossendorf e.V. (HZDR)
-# Authors: 
-# - Ênio Lopes Júnior
-# - Sebastian Felix Reinecke
-#
-# Contains modifications of code from casadi-nlp
-# (https://github.com/FilippoAiraldi/casadi-nlp),
-# Copyright (c) 2024 Filippo Airaldi, licensed under the MIT License.
-
 from collections.abc import Iterable
 from typing import Any, Generic, TypeVar, Union
 

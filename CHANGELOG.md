@@ -5,6 +5,13 @@ All notable changes to NeuralMPCX will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.0.1] - 2026-06-26
+### Fixed
+- Fixed headers on files that are legacy from csnlp library.
+- Fixed headers on files that are majorly new with small pieces from csnlp library.
+- Fixed mpc wrapper header with a map showing legacy vs new code. 71% of the file is new code. 29% is legacy.
+- Fixed control.py header. It's fully new. no legacy code there.
+
 ## [3.0.0] - 2026-06-24
 
 ### Added

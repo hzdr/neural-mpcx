@@ -3,10 +3,46 @@
 # Authors: 
 # - Ênio Lopes Júnior
 # - Sebastian Felix Reinecke
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 # Contains modifications of code from casadi-nlp
 # (https://github.com/FilippoAiraldi/casadi-nlp),
 # Copyright (c) 2024 Filippo Airaldi, licensed under the MIT License.
+#
+# ---------------------------------------------------------------------------
+# PROVENANCE MAP - legacy (MIT) vs new (Apache-2.0)
+# ---------------------------------------------------------------------------
+# Legacy - derived from csnlp / casadi-nlp (MIT, (c) 2024 Filippo Airaldi):
+#   - module helper: _n
+#   - class scaffolding + read-only properties: prediction_horizon,
+#       control_horizon, states, initial_states, first_states, first_actions,
+#       ns, actions, actions_expanded, na, slacks, nslacks, disturbances, nd,
+#       dynamics
+#   - methods: state, action, disturbance, constraint, set_dynamics,
+#       _multishooting_dynamics, _singleshooting_dynamics
+#     (each lightly modified to add the neural-mode branches noted below)
+#
+# New - original HZDR code (Apache-2.0):
+#   - module helpers: _smooth_clip, _to_mx, _broadcast_input_bias,
+#       _broadcast_output_bias
+#   - __init__ neural extensions: tuning_parameters, n_context, neural flag,
+#       and the persisted-LSTM bookkeeping (h/c buffers, warmup counters,
+#       h0/c0 NLP parameters)
+#   - properties: initial_actions, is_warmed_up
+#   - methods: reset_lstm_state, set_neural_dynamics, solve_mpc,
+#       _holdconstant_disturbance_pars, _neural_multishooting_dynamics,
+#       _neural_singleshooting_dynamics, _get_tuning_parameters
+#   - the neural-mode branches inside state, action, set_dynamics
+# ---------------------------------------------------------------------------
 
 import logging
 from collections.abc import Collection, Iterable
