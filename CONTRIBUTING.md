@@ -32,9 +32,9 @@ This project uses:
 Run all checks before submitting:
 
 ```bash
-black src tests
-ruff check --fix src tests
-ruff check src tests
+black src
+ruff check --fix src
+ruff check src
 mypy src
 pytest -q
 ```

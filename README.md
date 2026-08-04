@@ -27,7 +27,7 @@ NeuralMPCX is a Python library for building and deploying Model Predictive Contr
 ### 1. Download or clone the repository
 
 ```bash
-git clone https://github.com/hzdr/neural-mpcx.git
+git clone --branch v3.0.2 https://github.com/hzdr/neural-mpcx.git
 cd neural-mpcx
 ```
 
@@ -352,18 +352,6 @@ src/neuralmpcx/
 examples/
 ```
 
----
-
----
-
-## Testing
-
-```bash
-pip install -e ".[dev]"
-ruff check src tests
-mypy src
-pytest -q
-```
 
 ---
 
@@ -377,10 +365,10 @@ pytest -q
 
 ```bash
 # Check what would be reformatted
-black --check src tests
+black --check src
 
 # Format all code
-black src tests
+black src
 
 # Format specific files
 black src/neuralmpcx/neural/casadi_lstm.py
@@ -390,13 +378,13 @@ black src/neuralmpcx/neural/casadi_lstm.py
 
 ```bash
 # Check all linting issues
-ruff check src tests
+ruff check src
 
 # Auto-fix safe issues
-ruff check --fix src tests
+ruff check --fix src
 
 # Show what can be fixed
-ruff check --fix --show-fixes src tests
+ruff check --fix --show-fixes src
 ```
 
 #### Type Checking with mypy
@@ -412,20 +400,17 @@ Run all checks before committing:
 
 ```bash
 # 1. Format with black
-black src tests
+black src
 
 # 2. Auto-fix with ruff
-ruff check --fix src tests
+ruff check --fix src
 
 # 3. Check remaining issues
-ruff check src tests
+ruff check src
 
 # 4. Run type checking
 mypy src
 
-# 5. Run tests
-pytest -q
-```
 
 ### Pre-commit Hooks
 
@@ -472,7 +457,7 @@ Contributions are welcome. Follow these guidelines:
 - Follow **NumPy-style docstrings** for all public APIs (see Development Workflow section)
 - Follow Conventional Commits (`feat:`, `fix:`, `docs:`, etc.)
 - Open issues with minimal reproducible examples
-- Run all tests and linting checks before submitting PRs
+- Run all linting checks before submitting PRs
 
 ```bash
 pre-commit install

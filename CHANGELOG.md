@@ -5,6 +5,24 @@ All notable changes to NeuralMPCX will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.0.2] - 2026-08-04
+
+### Fixed
+
+- **Installation:** `pyproject.toml` restricted NumPy to the environment marker
+  `python_version <= '3.9'`, even though the project requires `>=3.9`, so a
+  clean install on Python 3.10-3.12 skipped NumPy entirely. The marker now
+  splits into `< '3.10'` (keeping the `< 2.0.0` cap) and `>= '3.10'`.
+- Tag-pinned clone instructions in the README, so users reproduce the released
+  version rather than the moving `main` branch.
+
+### Changed
+
+- Added `Programming Language :: Python :: 3.9`-`3.12` classifiers to
+  `pyproject.toml`, matching the Python versions the README reports as tested.
+- `codemeta.json` `softwareRequirements` now lists `tqdm`, `matplotlib`, and
+  `pandas`, matching the runtime dependencies declared in `pyproject.toml`.
+
 ## [3.0.1] - 2026-06-26
 ### Fixed
 - Fixed headers on files that are legacy from csnlp library.
