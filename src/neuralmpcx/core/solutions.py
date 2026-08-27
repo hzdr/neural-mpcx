@@ -12,8 +12,13 @@ from typing import Union
 
 import casadi as cs
 import numpy as np
-from casadi.tools.structure3 import CasadiStructured as _CasadiStructured
-from casadi.tools.structure3 import DMStruct as _DMStruct
+
+try:  # casadi < 3.8
+    from casadi.tools.structure3 import CasadiStructured as _CasadiStructured
+    from casadi.tools.structure3 import DMStruct as _DMStruct
+except ImportError:  # casadi >= 3.8 renamed structure3 to structure
+    from casadi.tools.structure import CasadiStructured as _CasadiStructured
+    from casadi.tools.structure import DMStruct as _DMStruct
 
 from .data import array2cs as _array2cs
 from .data import cs2array as _cs2array
@@ -59,17 +64,17 @@ class Solution(_Generic[SymType]):
     @property
     def status(self) -> str:
         """Gets the status of the solver at this solution."""
-        return self.stats["return_status"]
+        return str(self.stats["return_status"])
 
     @property
     def success(self) -> bool:
         """Gets whether the solver's run was successful."""
-        return self.stats["success"]
+        return bool(self.stats["success"])
 
     @property
     def barrier_parameter(self) -> float:
         """Gets the IPOPT barrier parameter at the optimal solution"""
-        return self.stats["iterations"]["mu"][-1]
+        return float(self.stats["iterations"]["mu"][-1])
 
     def value(self, x: SymType, eval: bool = True) -> Union[SymType, cs.DM]:
         """Computes the value of the expression substituting the values of this

@@ -1,5 +1,5 @@
 from functools import cached_property
-from typing import Literal, TypeVar, Union
+from typing import Literal, Optional, TypeVar, Union
 
 import casadi as cs
 import numpy as np
@@ -105,12 +105,12 @@ class HasConstraints(HasVariables[SymType]):
     @property
     def ng(self) -> int:
         """Number of equality constraints in the NLP scheme."""
-        return self._g.shape[0]
+        return int(self._g.shape[0])
 
     @property
     def nh(self) -> int:
         """Number of inequality constraints in the NLP scheme."""
-        return self._h.shape[0]
+        return int(self._h.shape[0])
 
     @property
     def dual_variables(self) -> dict[str, SymType]:
@@ -339,7 +339,7 @@ class HasConstraints(HasVariables[SymType]):
         self,
         name: str,
         direction: Literal["lb", "ub", "both"],
-        idx: Union[tuple[int, int], list[tuple[int, int]]] = None,
+        idx: Optional[Union[tuple[int, int], list[tuple[int, int]]]] = None,
     ) -> None:
         """Removes one or more lower and/or upper bounds from the given variable
 
@@ -369,9 +369,8 @@ class HasConstraints(HasVariables[SymType]):
             idx_ = np.arange(size, dtype=int)
         else:
             # transform 2D indices to 1D (casadi column-wise)
-            if isinstance(idx, tuple):
-                idx = (idx,)
-            idx_ = np.asarray([i[0] + i[1] * n_rows for i in idx], int)
+            idxs = [idx] if isinstance(idx, tuple) else idx
+            idx_ = np.asarray([i[0] + i[1] * n_rows for i in idxs], int)
 
         # add offset to skip variable created prior to the current
         offset = 0
@@ -416,7 +415,7 @@ class HasConstraints(HasVariables[SymType]):
     def remove_constraints(
         self,
         name: str,
-        idx: Union[tuple[int, int], list[tuple[int, int]]] = None,
+        idx: Optional[Union[tuple[int, int], list[tuple[int, int]]]] = None,
     ) -> None:
         """Removes one or more (equality or inequality) constraints from the problem.
 
@@ -446,9 +445,8 @@ class HasConstraints(HasVariables[SymType]):
             # transform 2D indices to 1D (casadi column-wise) and keep only the
             # remaining indices
             n_rows = old_con.size1()
-            if isinstance(idx, tuple):
-                idx = (idx,)
-            idx_to_remove = {i[0] + i[1] * n_rows for i in idx}
+            idxs = [idx] if isinstance(idx, tuple) else idx
+            idx_to_remove = {i[0] + i[1] * n_rows for i in idxs}
 
             # remove constraints and re-create corresponding multipliers
             old_con = cs.vec(old_con)  # flatten the constraint - cannot do otherwise

@@ -7,7 +7,7 @@
 # (https://github.com/FilippoAiraldi/casadi-nlp),
 # Copyright (c) 2024 Filippo Airaldi, licensed under the MIT License.
 
-from collections.abc import Generator
+from collections.abc import Iterable, Iterator
 from itertools import chain
 from typing import Literal, Optional
 
@@ -86,7 +86,7 @@ class WarmStartStrategy:
 
     def generate(
         self, biases: Optional[dict[str, npt.ArrayLike]] = None
-    ) -> Generator[dict[str, npt.ArrayLike], None, None]:
+    ) -> Iterator[dict[str, npt.ArrayLike]]:
         """Generates initial conditions for the MPC's NLP.
 
         Parameters
@@ -97,12 +97,12 @@ class WarmStartStrategy:
             biases are kept constant. These do not affect the generation of structure
             points in any way.
 
-        Yields
-        ------
-        Generator of dict of (str, array_like)
-            Yields the initial conditions for the MPC's NLP.
+        Returns
+        -------
+        Iterator of dict of (str, array_like)
+            The initial conditions for the MPC's NLP.
         """
-        to_be_chained = []
+        to_be_chained: list[Iterable[dict[str, npt.ArrayLike]]] = []
 
         if self.structured_points is not None:
             to_be_chained.append(self.structured_points)

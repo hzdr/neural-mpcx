@@ -45,10 +45,20 @@
 # ---------------------------------------------------------------------------
 
 import logging
-from collections.abc import Collection, Iterable
+from collections.abc import Iterable, Iterator
 from itertools import chain
 from math import ceil
-from typing import Any, Callable, Literal, Optional, Tuple, TypeVar, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Literal,
+    Optional,
+    Tuple,
+    TypeVar,
+    Union,
+    cast,
+)
 
 import casadi as cs
 import numpy as np
@@ -58,6 +68,9 @@ from ...core.solutions import Solution
 from ...core.warmstart import WarmStartStrategy
 from ...util.math import repeat
 from ..wrapper import Nlp, NonRetroactiveWrapper
+
+if TYPE_CHECKING:
+    from ...multistart.multistart_nlp import MultistartNlp
 
 logger = logging.getLogger(__name__)
 
@@ -282,7 +295,7 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         self._solve_count: int = 0
         self._lstm_h: Optional[list[np.ndarray]] = None
         self._lstm_c: Optional[list[np.ndarray]] = None
-        self._lstm_model: object = None
+        self._lstm_model: Any = None
         self._lstm_layers: int = 0
         self._lstm_h_out: int = 0
         self._lstm_hidden: int = 0
@@ -494,7 +507,7 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         size: int = 1,
         lb: Union[npt.ArrayLike, cs.DM] = -np.inf,
         ub: Union[npt.ArrayLike, cs.DM] = +np.inf,
-    ) -> tuple[SymType, SymType]:
+    ) -> tuple[SymType, SymType, SymType]:
         """Adds a control action variable to the MPC controller along the whole control
         horizon. Automatically expands this action to be of the same length of the
         prediction horizon by padding with the final action.
@@ -517,6 +530,8 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         action_expanded : casadi.SX or MX
             The same control  action variable, but expanded to the same length of the
             prediction horizon.
+        initial_action : casadi.SX or MX
+            The parameter holding the last action applied before the horizon.
         """
         nu_free = ceil(self._control_horizon / self._input_spacing)
         u = self.nlp.variable(name, (size, nu_free), lb, ub)[0]
@@ -585,7 +600,7 @@ class Mpc(NonRetroactiveWrapper[SymType]):
 
     def set_neural_dynamics(
         self,
-        model: object,
+        model: Any,
         *,
         name: str = "F",
         input_bias: Optional[Sym] = None,  # scalar (1x1) or (nu,1)
@@ -1052,8 +1067,6 @@ class Mpc(NonRetroactiveWrapper[SymType]):
                     "(na, T_ctx); reshape a single-input history before "
                     "passing it."
                 )
-        elif state is None:
-            raise ValueError("Conventional MPC requires `state`.")
 
         if self._neural:
             mpcstates = self.initial_states
@@ -1159,6 +1172,8 @@ class Mpc(NonRetroactiveWrapper[SymType]):
                 )[:, None]
                 self._solve_count += 1
         else:
+            if state is None:
+                raise ValueError("Conventional MPC requires `state`.")
             mpcstates = self.initial_states
             mpcactions = self.initial_actions
             if isinstance(state, dict):
@@ -1220,6 +1235,8 @@ class Mpc(NonRetroactiveWrapper[SymType]):
                 raise ValueError("input_bias should be (nu,1).")
 
         pars = self._get_tuning_parameters()
+        if pars is None:
+            pars = {}
         pars.update(additional_pars)
 
         if dynamic_pars is not None:
@@ -1231,8 +1248,12 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         # use the warmstart strategy to generate multiple initial points for the NLP if
         # the NLP supports multi and `vals0` is not already an iterable of dict
         if self.is_multi and (vals0 is None or isinstance(vals0, dict)):
-            more_vals0s = self._warmstart.generate(vals0)
-            if self.nlp.starts > self._warmstart.n_points:
+            # `vals0` may be prepended below while still being `None`, which the
+            # solver reads as 'no initial guess for this start'
+            more_vals0s: Iterator[Any] = self._warmstart.generate(vals0)
+            # `starts` only exists on the multistart NLP, which `is_multi` implies
+            multi_nlp = cast("MultistartNlp[SymType]", self.nlp)
+            if multi_nlp.starts > self._warmstart.n_points:
                 # the difference between these two has been checked to be at most one,
                 # meaning we can include `vals0` itself
                 more_vals0s = chain((vals0,), more_vals0s)
@@ -1300,6 +1321,7 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         """
         X = cs.vcat(self._states.values())
         U = cs.vcat(self._actions_exp.values())
+        args_at: Callable[[int], tuple[Any, ...]]
         if n_in < 3:
             args_at = lambda k: (X[:, k], U[:, k])
         else:
@@ -1346,6 +1368,7 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         """
         Xk = cs.vcat(self._initial_states.values())
         U = cs.vcat(self._actions_exp.values())
+        args_at: Callable[[int], tuple[Any, ...]]
         if n_in < 3:
             args_at = lambda k: (U[:, k],)
         else:
@@ -1382,8 +1405,6 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         self._states = dict(zip(self._states.keys(), cs.vertsplit(X, cumsizes)))
 
 
-    def _get_tuning_parameters(
-        self,
-    ) -> Union[None, dict[str, npt.ArrayLike], Collection[dict[str, npt.ArrayLike]]]:
+    def _get_tuning_parameters(self) -> Optional[dict[str, npt.ArrayLike]]:
         """Internal utility to retrieve parameters of the MPC in order to solve it."""
         return self._tuning_pars

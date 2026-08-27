@@ -17,7 +17,7 @@ def _solve_and_get_stats(
     solver: MemorizedFunc, kwargs: dict[str, npt.ArrayLike]
 ) -> dict[str, Any]:
     """Internal utility to simultaneously run the solver and get its stats."""
-    sol = solver(**kwargs)
+    sol: dict[str, Any] = solver(**kwargs)
     sol["p"] = kwargs["p"]  # add to solution the parameters for which it was computed
     sol["stats"] = solver.func.stats()  # add to solution the solver stats
     return sol

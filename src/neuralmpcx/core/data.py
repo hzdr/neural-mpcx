@@ -3,6 +3,7 @@ to convert to and from numpy arrays and CasADi symbolic variables, and how to fi
 the indices of a symbolic variable in a vector of symbols."""
 
 import itertools
+from collections.abc import Iterable
 from typing import Union
 
 import casadi as cs
@@ -42,6 +43,7 @@ def array2cs(x: np.ndarray) -> Union[cs.SX, cs.MX]:
     ndim = x.ndim
     if ndim == 0:
         return x.item()
+    indices: Iterable[Union[int, tuple[int, int]]]
     if ndim == 1:
         indices = range(x.shape[0])
         shape = (x.shape[0], 1)

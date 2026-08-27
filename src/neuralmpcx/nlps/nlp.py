@@ -102,7 +102,7 @@ class Nlp(HasObjective[SymType], SupportsDeepcopyAndPickle):
         lb: Union[npt.ArrayLike, cs.DM] = -np.inf,
         ub: Union[npt.ArrayLike, cs.DM] = +np.inf,
     ) -> tuple[SymType, SymType, SymType]:
-        out = super().variable(name, shape, lb, ub)
+        out: tuple[SymType, SymType, SymType] = super().variable(name, shape, lb, ub)
         if self._debug is not None:
             self._debug.register("x", name, shape)
         return out
@@ -116,7 +116,9 @@ class Nlp(HasObjective[SymType], SupportsDeepcopyAndPickle):
         soft: bool = False,
         simplify: bool = True,
     ) -> tuple[SymType, ...]:
-        out = super().constraint(name, lhs, op, rhs, soft, simplify)
+        out: tuple[SymType, ...] = super().constraint(
+            name, lhs, op, rhs, soft, simplify
+        )
         if self._debug is not None:
             self._debug.register("g" if op == "==" else "h", name, out[0].shape)
         return out

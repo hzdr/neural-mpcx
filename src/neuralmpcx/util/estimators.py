@@ -657,9 +657,9 @@ class KalmanFilter:
         if self._Ad.ndim != 2 or self._Ad.shape[0] != self._Ad.shape[1]:
             raise ValueError(f"Ad must be square, got shape {self._Ad.shape}")
 
-        self._nx = self._Ad.shape[0]
-        self._nu = self._Bd.shape[1]
-        self._ny = self._Cd.shape[0]
+        self._nx = int(self._Ad.shape[0])
+        self._nu = int(self._Bd.shape[1])
+        self._ny = int(self._Cd.shape[0])
 
         if self._Bd.shape[0] != self._nx:
             raise ValueError(
@@ -1320,9 +1320,9 @@ class AugmentedKalmanFilter:
         if Ad_arr.ndim != 2 or Ad_arr.shape[0] != Ad_arr.shape[1]:
             raise ValueError(f"Ad must be square, got shape {Ad_arr.shape}")
 
-        self._nx = Ad_arr.shape[0]
-        self._nu = Bd_arr.shape[1]
-        self._ny = Cd_arr.shape[0]
+        self._nx = int(Ad_arr.shape[0])
+        self._nu = int(Bd_arr.shape[1])
+        self._ny = int(Cd_arr.shape[0])
 
         # Bias channel selection, with the same defaults as the augmented EKF:
         # no input bias (it enters the dynamics and competes with the state for
@@ -2756,8 +2756,9 @@ class MovingHorizonEstimator:
             },
         }
         for key, value in (solver_opts or {}).items():
-            if isinstance(value, dict) and isinstance(opts.get(key), dict):
-                opts[key] = {**opts[key], **value}
+            current = opts.get(key)
+            if isinstance(value, dict) and isinstance(current, dict):
+                opts[key] = {**current, **value}
             else:
                 opts[key] = value
 

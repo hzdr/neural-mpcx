@@ -149,4 +149,4 @@ def repeat(
     casadi.SX, MX or DM
         Output array with repeated elements.
     """
-    return cs.kron(a, cs.GenDM_ones(repeats))
+    return cs.kron(a, cs.DM.ones(repeats))

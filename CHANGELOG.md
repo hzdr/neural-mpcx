@@ -5,6 +5,40 @@ All notable changes to NeuralMPCX will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.1.1] - 2026-08-27
+
+### Fixed
+
+- **CasADi 3.8 broke the package on import.** 3.8 renamed
+  `casadi/tools/structure3.py` to `structure.py`, so `import neuralmpcx` raised
+  `ModuleNotFoundError` and took the whole test suite with it.
+  `core/solutions.py` tries the old name first and falls back to the new one,
+  leaving 3.6 and 3.7 on the module they already used.
+- **`input_spacing > 1` crashed under CasADi 3.8.** `cs.GenDM_ones` no longer
+  exists, so `Mpc.action` died inside `util.math.repeat`. That call now reads
+  `cs.DM.ones`, which takes the same int or `(rows, cols)` tuple, returns the
+  same shapes, and dates back to CasADi 3.0.
+- `Mpc(..., tuning_parameters=None)` no longer raises `AttributeError` in
+  `solve_mpc`. The constructor accepts `None`, then `solve_mpc` called
+  `.update()` on it. `None` now reads as an empty dict.
+- `Mpc.action` declares the three values it returns. The annotation promised
+  two, while callers unpack `u, u_exp, u0`.
+
+### Changed
+
+- `mypy src` reports no issues across 27 modules. The old config pinned
+  `python_version = "3.9"`, which mypy 2.3 rejects, so the check aborted before
+  reading a line of source. The target is now `3.10`, and the config skips the
+  CasADi and NumPy stubs: CasADi 3.8 ships a `casadi.pyi` mypy cannot parse, and
+  the NumPy 2.5 stubs need a 3.12 target. The 52 errors this exposed spanned 15
+  modules. Most were CasADi shape values that wanted an explicit `int` at the
+  boundary.
+- `WarmStartStrategy.generate` returns `Iterator`, matching the `chain` object
+  it hands back. The old `Generator` annotation implied a `yield` the method
+  does not have.
+- `remove_variable_bounds` and `remove_constraints` spell their `idx` default as
+  `Optional[...]`, per PEP 484.
+
 ## [3.1.0] - 2026-08-27
 
 ### Added

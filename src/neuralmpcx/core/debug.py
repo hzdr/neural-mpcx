@@ -10,6 +10,11 @@ from typing import NamedTuple as _NamedTuple
 
 from numpy import prod as _prod
 
+QuantityType = Literal[
+    "Parameter", "Decision variable", "Equality constraint", "Inequality constraint"
+]
+"""Type of quantity that a debug entry can describe."""
+
 
 class NlpDebugEntry(_NamedTuple):
     """Class representing a single entry of the debug information for an
@@ -18,9 +23,7 @@ class NlpDebugEntry(_NamedTuple):
     name: str
     """Name of the quantity."""
 
-    type: Literal[
-        "Parameter", "Decision variable", "Equality constraint", "Inequality constraint"
-    ]
+    type: QuantityType
     """Type of the quantity."""
 
     shape: tuple[int, ...]
@@ -61,7 +64,7 @@ class NlpDebug:
     - the inequality constraints ``h``.
     """
 
-    _types = _MappingProxyType(
+    _types: _MappingProxyType[str, QuantityType] = _MappingProxyType(
         {
             "p": "Parameter",
             "x": "Decision variable",

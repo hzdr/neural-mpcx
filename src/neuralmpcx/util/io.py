@@ -6,15 +6,21 @@
 """
 
 import pickle
-from copy import _reconstruct
+
+# private CPython helper used to rebuild an object from its reduced form; it is
+# deliberately absent from typeshed, hence the ignore
+from copy import _reconstruct  # type: ignore[attr-defined]
 from copy import deepcopy as _deepcopy
 from os.path import splitext as _splitext
 from pickletools import optimize as _optimize
 from typing import TYPE_CHECKING, Callable, Literal, Optional
 from typing import Any as _Any
 from typing import TypeVar as _TypeVar
+from typing import cast as _cast
 
 from ..core.cache import invalidate_caches_of as _invalidate_caches_of
+
+_Compression = Literal["lzma", "bz2", "gzip", "brotli", "blosc2", "matlab", "numpy"]
 
 if TYPE_CHECKING:
     from scipy.io.matlab import mat_struct
@@ -104,7 +110,7 @@ class SupportsDeepcopyAndPickle:
         # overwrite the filtered state with its full version
         fullstate = self.__getstate__(True)
         new_rv = (*rv[:2], fullstate, *rv[3:])
-        return _reconstruct(self, memo, *new_rv)
+        return _cast(T, _reconstruct(self, memo, *new_rv))
 
     def __getstate__(self: T, fullstate: bool = False) -> Optional[dict[str, _Any]]:
         """Returns the instance's state to be pickled/deepcopied."""
@@ -121,7 +127,7 @@ class SupportsDeepcopyAndPickle:
         return state
 
 
-_COMPRESSION_EXTS: dict[str, Optional[str]] = {
+_COMPRESSION_EXTS: dict[str, Optional[_Compression]] = {
     ".pkl": None,
     ".xz": "lzma",
     ".pbz2": "bz2",
@@ -135,9 +141,7 @@ _COMPRESSION_EXTS: dict[str, Optional[str]] = {
 
 def save(
     filename: str,
-    compression: Optional[
-        Literal["lzma", "bz2", "gzip", "brotli", "blosc2", "matlab", "numpy"]
-    ] = None,
+    compression: Optional[_Compression] = None,
     **data: _Any,
 ) -> str:
     """Saves data to a (possibly compressed) file. Inspired by

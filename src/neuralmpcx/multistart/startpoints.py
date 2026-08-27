@@ -74,7 +74,7 @@ class RandomStartPoints:
         biases = self.biases
         scales = self.scales
         points = self.points
-        out = {}
+        out: dict[str, npt.ArrayLike] = {}
         for _ in range(self.multistarts):
             out.clear()
             for name, point in points.items():

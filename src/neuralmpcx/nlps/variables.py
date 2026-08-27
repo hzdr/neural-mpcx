@@ -30,7 +30,7 @@ class HasVariables(HasParameters[SymType]):
     @property
     def nx(self) -> int:
         """Number of variables in the NLP scheme."""
-        return self._x.shape[0]
+        return int(self._x.shape[0])
 
     @property
     def variables(self) -> dict[str, SymType]:

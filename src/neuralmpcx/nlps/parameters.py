@@ -28,7 +28,7 @@ class HasParameters(Generic[SymType]):
     @property
     def np(self) -> int:
         """Number of parameters in the NLP scheme."""
-        return self._p.shape[0]
+        return int(self._p.shape[0])
 
     @property
     def parameters(self) -> dict[str, SymType]:

@@ -6,15 +6,21 @@ object on the fly."""
 
 import functools
 import inspect
+import sys
 from typing import Callable
 
+if sys.version_info >= (3, 10):
+    from typing import TypeGuard
+else:  # pragma: no cover - Python 3.9 fallback
+    from typing_extensions import TypeGuard
 
-def _is_cached_property(c: Callable) -> bool:
+
+def _is_cached_property(c: Callable) -> TypeGuard[functools.cached_property]:
     """Returns True if the callable is a cached property."""
     return isinstance(c, functools.cached_property)
 
 
-def _is_lru_cache(c: Callable) -> bool:
+def _is_lru_cache(c: Callable) -> TypeGuard[functools._lru_cache_wrapper]:
     """Returns True if the callable is a lru cache."""
     return hasattr(c, "cache_info") or hasattr(c, "cache_clear")
 

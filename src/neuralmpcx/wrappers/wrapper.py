@@ -73,12 +73,16 @@ class Wrapper(SupportsDeepcopyAndPickle, Generic[SymType]):
     ) -> Union[Solution[SymType], list[Solution[SymType]]]:
         # Similar logic to `MultiStartNlp.__call__`: call solve_multi only if either
         # pars or vals0 is an iterable; otherwise, run the single, base NLP
+        # (both are reached through `__getattr__`, hence the explicit annotation)
+        sol: Union[Solution[SymType], list[Solution[SymType]]]
         if not self.nlp.is_multi or (
             (pars is None or isinstance(pars, dict))
             and (vals0 is None or isinstance(vals0, dict))
         ):
-            return self.solve(pars, vals0)
-        return self.solve_multi(pars, vals0, **kwargs)
+            sol = self.solve(pars, vals0)
+        else:
+            sol = self.solve_multi(pars, vals0, **kwargs)
+        return sol
 
     def __str__(self) -> str:
         """Returns the wrapped NLP string."""
