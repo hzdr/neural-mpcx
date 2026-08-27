@@ -54,7 +54,6 @@ import casadi as cs
 import numpy as np
 import numpy.typing as npt
 
-from ...core.cache import invalidate_caches_of
 from ...core.solutions import Solution
 from ...core.warmstart import WarmStartStrategy
 from ...util.math import repeat
@@ -888,7 +887,13 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         self._last_action_on_fail = use_last_action_on_fail
         self._last_solution: Optional[Solution[SymType]] = None
         self._last_action: Optional[cs.DM] = None
-        self._warmstart = WarmStartStrategy(warmstart)
+        # a full strategy (structured/random multistart points) must survive;
+        # only the plain string shorthand gets wrapped
+        self._warmstart = (
+            warmstart
+            if isinstance(warmstart, WarmStartStrategy)
+            else WarmStartStrategy(warmstart)
+        )
 
     def solve_mpc(
         self,
@@ -969,9 +974,8 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         action_context : array_like, optional
             Recent control history. **Required in neural mode** (unused in
             conventional mode, where `u0` comes from `self._last_action`).
-            Accepted shapes:
-            - `(T_ctx, na)` or `(na, T_ctx)` for multi-input,
-            - `(T_ctx,)` for single-input.
+            Must be 2-D, either `(T_ctx, na)` or `(na, T_ctx)`; a single-input
+            history of shape `(T_ctx,)` must be reshaped by the caller.
             The last `self._n_context` steps feed the numeric `(h, c)` warmup; the
             last step builds the `u0` parameter with shape `(na, 1)`.
         setpoint : array_like, optional
@@ -1041,6 +1045,12 @@ class Mpc(NonRetroactiveWrapper[SymType]):
             if state_context is None or action_context is None:
                 raise ValueError(
                     "Neural MPC requires `state_context` and `action_context`."
+                )
+            if np.asarray(action_context).ndim != 2:
+                raise ValueError(
+                    "`action_context` must be 2-D, either (T_ctx, na) or "
+                    "(na, T_ctx); reshape a single-input history before "
+                    "passing it."
                 )
         elif state is None:
             raise ValueError("Conventional MPC requires `state`.")

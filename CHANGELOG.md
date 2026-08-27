@@ -5,6 +5,109 @@ All notable changes to NeuralMPCX will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.1.0] - 2026-08-27
+
+### Added
+- `MultistartNlp`: An :class:`Nlp` solved from multiple starting points 
+(serial best-of-N).solve the same problem from several initial guesses 
+and keep the best solution.
+- `AugmentedExtendedKalmanFilter`: joint state and input/output bias estimation
+  for nonlinear models, giving offset-free NMPC under plant-model mismatch. The
+  input bias enters the dynamics (`x⁺ = f(x, u + S_du·δu)`) rather than the
+  feedthrough, and the augmented Jacobians come from CasADi AD.
+- Bias channels are selected rather than assumed, under the detectability
+  budget `n_bias ≤ ny`; the constructor runs the rank test and
+  `detectability_report()` exposes it.
+- `MovingHorizonEstimator`: constrained state and input/output bias estimation.
+  Estimates the same quantities as `AugmentedExtendedKalmanFilter` over the same
+  augmented model, but by minimizing an arrival cost plus weighted process and
+  measurement residuals across a window of the last `horizon` measurements
+  rather than by a single linear correction — so **bounds on the estimate are
+  enforced** (`x_lb`/`x_ub`, `du_bias_lb`/`ub`, `dy_bias_lb`/`ub`), which is the
+  reason to prefer it. The process and measurement noises are eliminated
+  analytically, leaving a bound-constrained least-squares NLP with no equality
+  constraints, which cannot go infeasible.
+  - The default `arrival_cost="ekf"` anchors the window on a companion
+    `AugmentedExtendedKalmanFilter`'s *one-step-predicted* estimate from the
+    cycle the oldest slot belongs to. With that anchoring and no active bounds
+    it reproduces the filter **exactly** on a linear model, at any horizon;
+    tests assert this to `1e-6` for `horizon ∈ {1, 3, 8}`, through the
+    window-fill phase included. `arrival_cost="constant"` is the heuristic
+    alternative.
+  - `Q_x`/`Q_du`/`Q_dy`/`R`/`P0` are **covariances**, as everywhere else in the
+    module — not the inverse-covariance weights the moving-horizon literature
+    (and do-mpc's `P_x`/`P_v`/`P_w`) uses. They must be positive *definite*
+    rather than merely semi-definite, since the cost weights by their inverse:
+    `Q_du=np.zeros((1,1))` is legal on the filters and rejected here.
+  - The same `n_bias ≤ ny` detectability budget applies, delegated to the
+    companion filter rather than reimplemented.
+  - `retune()` rewrites the weights in place — the problem is not rebuilt and
+    the window is kept — because the weights live in the NLP's parameter vector.
+    `reset()` discards the window.
+  - Diagnostics: `last_cost` (a better divergence alarm than the innovation,
+    since mismatch is spread across the window and active bounds clip the
+    residual), `last_status`, `last_solve_time_s`, `n_solver_failures`,
+    `n_arrival_repairs`, `window_fill`, `z_traj`/`x_traj`.
+- `AugmentedExtendedKalmanFilter`'s augmented model construction moved to a
+  module-level `_augmented_model` shared with `MovingHorizonEstimator`. The
+  expression graph is unchanged, so the filter's numbers are bit-identical.
+- `tests/`: the test suite, 251 tests over the library and the benchmark
+  harness, run with `pytest -q` from the repository root.
+  - Tests needing PyTorch call `pytest.importorskip("torch")` and skip
+    without it, as do those reading the `hidden_size=8` checkpoints under
+    `examples/`, so a clone without them still runs the rest.
+
+### Fixed
+
+- **`AugmentedKalmanFilter`'s input bias now reaches the plant model.** Two
+  defects, both found while building `AugmentedExtendedKalmanFilter` in the
+  previous entry and deliberately left there because correcting them changes
+  the numbers the shipped linear-SS path and the grinding-circuit example
+  produce. **Behaviour-changing, not additive** — see the migration note below.
+  - `A_aug` gains its `Bd @ S_du` cross-block, so the augmented prediction is
+    `x⁺ = Ad·x + Bd·(u + S_du·δu)` — the linear form of the AEKF's
+    `x⁺ = f(x, u + S_du·δu)`. It previously reached the model only through `Dd`
+    in `C_aug`, so with `Dd = 0` it was a **completely dead state**: it
+    random-walked under `Q_du`, corrected nothing, and was unobservable, while
+    still being reported as an estimate. The shipped grinding template converts
+    to `D = 0` (`max|D| == 0.0` over all 16 entries), so this was the shipped
+    configuration, not a corner case.
+  - Bias channels are now **selected** rather than assumed, through `du_index` /
+    `dy_index` with the AEKF's defaults (no input bias, an output bias per
+    output). The old unconditional `nu + ny` augmentation was provably
+    undetectable for any plant with an input. `Q_du`/`Q_dy` are sized to the
+    selection; `du_bias_est` / `dy_bias_est` stay **full width** (zero off the
+    selection), so `get_mpc_biases()` remains a drop-in for existing consumers.
+- `bias_detectability(A, B, C, du_index, dy_index)` is now public, and both
+  augmented filters delegate their rank test to it so a selection cannot be accepted 
+  at commissioning and then refused at build.
+  - It tests the textbook condition **incrementally**: the bias states must
+    *add* `n_bias` to the rank of the plant's own `[[I − A], [C]]`, rather than
+    reach the absolute `nx + n_bias`. Where the plant is detectable the baseline
+    *is* `nx` and the two are identical, so no AEKF result moves. Where it is
+    not, the incremental form separates two failures the single number conflates:
+    a **selection** that is unidentifiable (raises, and names the channels), and
+    a **realization** carrying modes at `z = 1` that no measurement sees (warns
+    — it is equally true of the plain Kalman filter on that model, so refusing
+    only the augmented one would be incoherent).
+  - The canonical unidentifiable selection is an output bias on a channel the
+    model already integrates: bias and integrator are both free and feed the
+    same output, so their split follows the drift covariances rather than the
+    data — and an integrating output is offset-free without one. 
+- `solve_mpc` rejects a non-2-D `action_context` with a named `ValueError`
+  instead of dying on `IndexError: tuple index out of range` from the column
+  arithmetic. The docstring had advertised a flat `(T_ctx,)` history for the
+  single-input case, which never worked; it now states the 2-D requirement.
+
+### Migration
+
+- **A tuned `q_du` changes meaning.** It used to feed a dead state on any model
+  with `D = 0`; it now moves the plant model. Re-check any value tuned against
+  the old behaviour.
+- `AugmentedKalmanFilter(Ad, Bd, Cd)` no longer augments every input. Pass
+  `du_index` explicitly to keep an input bias, and size `Q_du`/`Q_dy` to the
+  selection rather than to the full signal width.
+
 ## [3.0.3] - 2026-08-27
 
 ### Added

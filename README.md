@@ -27,7 +27,7 @@ NeuralMPCX is a Python library for building and deploying Model Predictive Contr
 ### 1. Download or clone the repository
 
 ```bash
-git clone --branch v3.0.2 https://github.com/hzdr/neural-mpcx.git
+git clone --branch v3.1.0 https://github.com/hzdr/neural-mpcx.git
 cd neural-mpcx
 ```
 
@@ -111,7 +111,7 @@ The plant model is a discrete-time LTI state-space system ($A_d, B_d, C_d, D_d$)
 
 The original paper uses a step-response DMC. Here, the same problem is formulated as an NLP over a state-space model using CasADi/IPOPT (multi-shooting), with unified soft constraints via slacks and a large penalty $w$.
 
-The paper’s 16 transfer functions $G_{ij}(s)$ are assembled into a single state-space model offline and discretized. The MPC uses this discrete SS model directly.
+The paper’s 16 transfer functions $`G_{ij}(s)`$ are assembled into a single state-space model offline and discretized. The MPC uses this discrete SS model directly.
 
 ### Classic Nonlinear MPC
 
@@ -185,6 +185,70 @@ for t in range(T):
 
 See [`examples/CSTR/nmpc_cstr.py`](examples/CSTR/nmpc_cstr.py) for a complete output-feedback NMPC deployment where the EKF reconstructs unmeasured reactor concentrations from temperature measurements alone.
 
+### Offset-free nonlinear MPC: `AugmentedExtendedKalmanFilter`
+
+`AugmentedExtendedKalmanFilter` is the EKF plus the `AugmentedKalmanFilter`'s biases: it estimates the plant state of a *nonlinear* model together with random-walk input and output biases, giving offset-free tracking under plant-model mismatch. The augmented Jacobians come from CasADi AD, so the input bias enters the dynamics exactly — `x⁺ = f(x, u + S_du·δu)`, `y = h(x) + S_dy·δy`.
+
+```python
+from neuralmpcx.util.estimators import AugmentedExtendedKalmanFilter
+
+aekf = AugmentedExtendedKalmanFilter(
+    f=mpc.dynamics, h=C,
+    du_index=[0],        # actuator offset on the first MV
+    dy_index=[0],        # sensor/model bias on the first measured output
+    Q_x=np.eye(4) * 1e-6, Q_du=np.eye(1) * 1e-4, Q_dy=np.eye(1) * 1e-4,
+    R=np.eye(2) * 1e-5,
+)
+for t in range(T):
+    u_opt = mpc.solve_mpc(state=aekf.x_est, state_indices=state_indices,
+                          dynamic_pars=aekf.get_mpc_biases(), ...)
+    y_meas = plant.measure()
+    aekf.predict(u=u_opt)
+    aekf.update(y=y_meas)
+```
+
+Two things to know before using it, both enforced by the class:
+
+**Bias channels are a budget.** With `n_bias` integrating bias states the augmented system is detectable only if `rank([[I − A, −B_d], [C, C_d]]) == nx + n_bias`, and that matrix has just `nx + ny` rows — so **at most `ny` bias states can ever be estimated**, where `ny` counts *measured* channels. Asking for a bias on every input *and* every output is undetectable for any plant with an input: the filter still returns numbers, but the δu/δy split is decided by the ratio of `Q_du` to `Q_dy` rather than by the data. The constructor runs the rank test and refuses; `detectability_report()` returns the rank, the deficiency and the cap, and `check_detectability=False` overrides. The default is output bias on every channel and no input bias — `n_bias == ny` exactly, the textbook offset-free choice.
+
+**The bias only absorbs what `Q_x` leaves it.** The state and the bias compete for the same innovation. Leave `Q_x` wide and the state chases the measurement on its own, the innovation collapses and the bias never moves — the tuning mistake that makes an AEKF look like it does nothing. Tightening `Q_x` forces the state to obey the model and hands the steady-state mismatch to the bias, which is what it is for.
+
+The linear `AugmentedKalmanFilter` estimates the same quantities the same way — `A_aug` carries the `Bd @ S_du` cross-block, so its `x⁺ = Ad·x + Bd·(u + S_du·δu)` is this filter's statement written for a linear model, and both take the same `du_index`/`dy_index` under the same budget. (Before the current release it did not: `A_aug`'s cross-block was zero, so `du_bias` reached the model only through the feedthrough `Dd` and did nothing at all when `Dd == 0`.)
+
+**Detectability is tested incrementally.** `bias_detectability(A, B, C, du_index, dy_index)` is public, and both augmented filters delegate to it. It asks whether the bias states *add* `n_bias` to the rank of the plant's own `[[I − A], [C]]`, rather than whether the rank reaches `nx + n_bias`. Where the plant is detectable those are the same statement. Where it is not, they differ usefully: a model carrying integrators that no measurement observes only earns a warning (that is equally true of the plain Kalman filter on it), while a bias the data genuinely cannot separate still raises — and the offending channels are named. The case worth knowing is an **output bias on a channel the model already integrates**: bias and integrator are both free and feed the same output, so their split follows `Q_dy` versus `Q_x` rather than the plant, and an integrating output is offset-free without one anyway.
+
+### Constrained estimation: `MovingHorizonEstimator`
+
+`MovingHorizonEstimator` estimates the same quantities as `AugmentedExtendedKalmanFilter` — plant state plus selected input and output biases — but instead of one linear correction per step it re-solves a small least-squares problem over the last `horizon` measurements. The drop-in surface is identical; only `horizon` is new.
+
+```python
+from neuralmpcx.util.estimators import MovingHorizonEstimator
+
+mhe = MovingHorizonEstimator(
+    f=mpc.dynamics, h=C,
+    horizon=10,
+    du_index=[0], dy_index=[0],
+    Q_x=np.eye(4) * 1e-6, Q_du=np.eye(1) * 1e-4, Q_dy=np.eye(1) * 1e-4,
+    R=np.eye(2) * 1e-5,
+    x_lb=[0.0, 0.0, -np.inf, -np.inf],   # concentrations cannot go negative
+    du_bias_ub=[0.15],                   # the actuator offset is physically capped
+)
+for t in range(T):
+    u_opt = mpc.solve_mpc(state=mhe.x_est, state_indices=state_indices,
+                          dynamic_pars=mhe.get_mpc_biases(), ...)
+    y_meas = plant.measure()
+    mhe.predict(u=u_opt)                 # order is mandatory here, not conventional
+    mhe.update(y=y_meas)
+```
+
+**Reach for it when you have bounds worth enforcing.** That is the whole argument. A Kalman filter's correction is an unconstrained linear update, so it will report a negative concentration or an actuator offset larger than the valve can produce; here `x_lb`/`x_ub` and the bias bounds constrain the estimate itself. The second benefit is that the nonlinear model is used as written across the window rather than linearized once per step.
+
+**It is the same estimator when the bounds are slack.** On a linear model with the default `arrival_cost="ekf"` and no active bound, it reproduces `AugmentedExtendedKalmanFilter` *exactly*, for any horizon — the test suite asserts this to `1e-6` at `horizon ∈ {1, 3, 8}`. So the horizon buys constraint handling and robustness to nonlinearity, not consistency, and there is nothing to gain from a long window if you have neither.
+
+**It costs an NLP per control cycle.** Budget roughly two orders of magnitude more model evaluation than a filter, with second derivatives, landing in the same cycle as the MPC solve. `last_solve_time_s` reports it. Tuning transfers unchanged from the AEKF, with one exception: the covariances must be positive *definite*, because the cost weights by their inverse — `Q_du=np.zeros((1,1))` is legal on the filter and rejected here.
+
+`retune()` changes the weights in place without rebuilding the problem or discarding the window; `reset()` does discard it.
+
 ## RNN-Based Dynamics in MPC
 
 NeuralMPCX uses recurrent neural networks as the dynamics model inside the MPC. This required three adaptations:
@@ -205,23 +269,23 @@ Three indices locate any quantity in the closed loop:
 - the subscript $i$ is the **column along the free horizon** $N$;
 - the second superscript $j$ is the **IPOPT interior-point iteration**, running from the warm-started initial guess $j = 0$ to the converged iterate $j = n_s$.
 
-Combined, they name one quantity: $U^{(k,j)}_{:,\,i}$ is the input at prediction time $i$ of the candidate trajectory IPOPT tests at iteration $j$ of step $k$ (the colon spans all input channels).
+Combined, they name one quantity: $`U^{(k,j)}_{:,\,i}`$ is the input at prediction time $i$ of the candidate trajectory IPOPT tests at iteration $j$ of step $k$ (the colon spans all input channels).
 
 At deployment, NeuralMPCX makes the LSTM **stateful**: its hidden and cell states $(h_0^{(k)}, c_0^{(k)})$ persist on the `Mpc` instance across `solve_mpc()` calls and enter the optimization problem as plain NLP parameters `h0`/`c0`. The dynamics function $\hat{X} = F(U, h_0, c_0)$ unrolls the LSTM symbolically over the prediction horizon: the rollout is **free-running** — only the control columns drive the recursion, the hidden state feeds back on itself, and no measurement enters the symbolic graph. No state estimation happens inside the optimizer, which keeps the NLP graph small and the solve fast. (Past outputs are not an input to the rollout; they only seed `h0`/`c0` through the warmup below.)
 
 The warmed-up states carry only the step index $k$, never $j$: a separate numeric step estimates $(h_0^{(k)}, c_0^{(k)})$ once, before the solve begins, and they stay **fixed across every IPOPT iteration** $j$. The solver re-evaluates $F$ and its derivatives at each $j$ as the decision variables change, but each evaluation restarts the LSTM from the same $(h_0^{(k)}, c_0^{(k)})$.
 
-Because the persisted $(h_0^{(k)}, c_0^{(k)})$ already encode the current measurement, the neural NLP needs **no anchor column**: it spans exactly `N = prediction_horizon` columns, and every column $X^{(k,j)}_{:,\,i}$ is a genuine prediction rolled forward from `h0`/`c0`. The multi-shooting dynamics constraint is $F(U^{(k,j)}, h_0^{(k)}, c_0^{(k)})_{:,\,0:} = X^{(k,j)}_{:,\,0:}$ (every column is a prediction). The most recent measurement and applied action survive only as the cost parameters `x0`/`u0` — used for terms like $\Delta u$ and initial/terminal penalties — and are **not** inputs to `F`. On convergence at $j = n_s$, `solve_mpc()` applies the first free input $u^{(k)} = U^{(k,n_s)}_{:,\,0}$ as the receding-horizon action (`solution.vals["u"][:, 0]`), and $X^{(k,n_s)}_{:,\,0}$ is the first predicted future state. (Classic MPC instead keeps the usual anchor column `x[:, 0] == x0` and spans `N + 1` columns.)
+Because the persisted $(h_0^{(k)}, c_0^{(k)})$ already encode the current measurement, the neural NLP needs **no anchor column**: it spans exactly `N = prediction_horizon` columns, and every column $`X^{(k,j)}_{:,\,i}`$ is a genuine prediction rolled forward from `h0`/`c0`. The multi-shooting dynamics constraint is $`F(U^{(k,j)}, h_0^{(k)}, c_0^{(k)})_{:,\,0:} = X^{(k,j)}_{:,\,0:}`$ (every column is a prediction). The most recent measurement and applied action survive only as the cost parameters `x0`/`u0` — used for terms like $\Delta u$ and initial/terminal penalties — and are **not** inputs to `F`. On convergence at $j = n_s$, `solve_mpc()` applies the first free input $`u^{(k)} = U^{(k,n_s)}_{:,\,0}`$ as the receding-horizon action (`solution.vals["u"][:, 0]`), and $`X^{(k,n_s)}_{:,\,0}`$ is the first predicted future state. (Classic MPC instead keeps the usual anchor column `x[:, 0] == x0` and spans `N + 1` columns.)
 
 ### The warmup algorithm
 
 The persisted $(h_0^{(k)}, c_0^{(k)})$ are maintained numerically, outside the NLP, using **teacher forcing** — exactly mirroring how the network was trained:
 
-1. **Teacher-forced context step.** For each context sample $(u^{(k)}_{:,\,i}, y^{(k)}_{:,\,i})$, the first-layer hidden state is *overwritten by the measured state* (a well-defined substitution since $y = x$ and the projected hidden state matches the output dimension), the action is fed as input, and the cell states and any deeper-layer hidden states propagate untouched. Each measurement therefore corrects the memory directly while the unmeasurable part is carried forward.
+1. **Teacher-forced context step.** For each context sample $`(u^{(k)}_{:,\,i}, y^{(k)}_{:,\,i})`$, the first-layer hidden state is *overwritten by the measured state* (a well-defined substitution since $y = x$ and the projected hidden state matches the output dimension), the action is fed as input, and the cell states and any deeper-layer hidden states propagate untouched. Each measurement therefore corrects the memory directly while the unmeasurable part is carried forward.
 
-2. **Hybrid warmup phase** (the first $n_w$ solves, $k < n_w$ where $n_w$ is `n_warmup`). Each `solve_mpc()` call re-runs the teacher-forced pass over the *full* $n_c$-step window of measured pairs $\{(u^{(k)}_{:,\,i}, y^{(k)}_{:,\,i})\}_{i=-n_c}^{-1}$ via `estimate_numeric`, *seeded with the previous solve's* states (zeros at $k = 0$). This blends fresh measurements with accumulated memory while the buffers settle.
+2. **Hybrid warmup phase** (the first $n_w$ solves, $k < n_w$ where $n_w$ is `n_warmup`). Each `solve_mpc()` call re-runs the teacher-forced pass over the *full* $n_c$-step window of measured pairs $`\{(u^{(k)}_{:,\,i}, y^{(k)}_{:,\,i})\}_{i=-n_c}^{-1}`$ via `estimate_numeric`, *seeded with the previous solve's* states (zeros at $k = 0$). This blends fresh measurements with accumulated memory while the buffers settle.
 
-3. **Steady-state phase** (from $k = n_w$ onward). Each solve advances the stored states by exactly *one* teacher-forced step via `step_numeric`, using only the newest measured pair $(u^{(k)}_{:,\,-1}, y^{(k)}_{:,\,-1})$ — cutting the per-solve update from $\mathcal{O}(n_c)$ to $\mathcal{O}(1)$.
+3. **Steady-state phase** (from $k = n_w$ onward). Each solve advances the stored states by exactly *one* teacher-forced step via `step_numeric`, using only the newest measured pair $`(u^{(k)}_{:,\,-1}, y^{(k)}_{:,\,-1})`$ — cutting the per-solve update from $\mathcal{O}(n_c)$ to $\mathcal{O}(1)$.
 
 4. **Inside the NLP.** The resulting $(h_0^{(k)}, c_0^{(k)})$ are passed as the parameter values of `h0`/`c0`, and `F` rolls the LSTM forward symbolically over the prediction horizon $N$ from them (fixed across all IPOPT iterations $j$).
 
@@ -373,6 +437,19 @@ the common-random-numbers contract, and how failed runs are accounted for.
 
 ---
 
+---
+
+## Testing
+
+```bash
+pip install -e ".[dev]"
+ruff check src tests
+mypy src
+pytest -q
+```
+
+---
+
 ## Development Workflow
 
 ### Code Formatting and Linting
@@ -383,10 +460,10 @@ the common-random-numbers contract, and how failed runs are accounted for.
 
 ```bash
 # Check what would be reformatted
-black --check src
+black --check src tests
 
 # Format all code
-black src
+black src tests
 
 # Format specific files
 black src/neuralmpcx/neural/casadi_lstm.py
@@ -396,13 +473,13 @@ black src/neuralmpcx/neural/casadi_lstm.py
 
 ```bash
 # Check all linting issues
-ruff check src
+ruff check src tests
 
 # Auto-fix safe issues
-ruff check --fix src
+ruff check --fix src tests
 
 # Show what can be fixed
-ruff check --fix --show-fixes src
+ruff check --fix --show-fixes src tests
 ```
 
 #### Type Checking with mypy
@@ -418,17 +495,20 @@ Run all checks before committing:
 
 ```bash
 # 1. Format with black
-black src
+black src tests
 
 # 2. Auto-fix with ruff
-ruff check --fix src
+ruff check --fix src tests
 
 # 3. Check remaining issues
-ruff check src
+ruff check src tests
 
 # 4. Run type checking
 mypy src
 
+# 5. Run tests
+pytest -q
+```
 
 ### Pre-commit Hooks
 
@@ -475,7 +555,7 @@ Contributions are welcome. Follow these guidelines:
 - Follow **NumPy-style docstrings** for all public APIs (see Development Workflow section)
 - Follow Conventional Commits (`feat:`, `fix:`, `docs:`, etc.)
 - Open issues with minimal reproducible examples
-- Run all linting checks before submitting PRs
+- Run all tests and linting checks before submitting PRs
 
 ```bash
 pre-commit install

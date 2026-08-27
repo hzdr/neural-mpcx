@@ -10,7 +10,7 @@ r"""Neural MPCX (neuralmpcx) is a Model Predictive Control toolkit with neural M
 ==================== ========================================================
 """
 
-__version__ = "3.0.3"
+__version__ = "3.1.0"
 
 __all__ = ["Nlp", "Solution"]
 

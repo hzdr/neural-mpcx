@@ -58,7 +58,7 @@ def is_pickleable(obj: _Any) -> bool:
     try:
         pickle.dumps(obj)
         return True
-    except (pickle.PicklingError, TypeError, AttributeError):
+    except Exception:
         return False
 
 
@@ -270,13 +270,6 @@ def load(filename: str) -> dict[str, _Any]:
     -------
     data : dict
         The saved data in the shape of a dictionary.
-
-    Warnings
-    --------
-    Only load data you trust. This function uses :mod:`pickle` (or
-    :func:`numpy.load` with ``allow_pickle=True``) internally, which can
-    execute arbitrary code during deserialization. Never call this function on
-    files from untrusted or unauthenticated sources.
     """
     ext = _splitext(filename)[1]
     compression = _COMPRESSION_EXTS[ext]

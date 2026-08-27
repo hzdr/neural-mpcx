@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "neuralmpcx"
-version = "3.0.3"
+version = "3.1.0"
 description = "Model Predictive Control toolkit with neural MPC support (CasADi-friendly)."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -110,6 +110,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
+"tests/**/*.py" = ["S101"]
 "examples/**/*.py" = ["E402", "N815", "N816", "F601", "SIM113"]  # Relaxed rules for example/demo code
 "examples/**/*.ipynb" = ["E402", "N815", "N816", "F601", "SIM113"]  # Relaxed rules for notebooks
 

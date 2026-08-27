@@ -13,12 +13,14 @@ in a structured or random way:
 """
 
 __all__ = [
+    "MultistartNlp",
     "RandomStartPoint",
     "RandomStartPoints",
     "StructuredStartPoint",
     "StructuredStartPoints",
 ]
 
+from .multistart_nlp import MultistartNlp
 from .startpoints import (
     RandomStartPoint,
     RandomStartPoints,

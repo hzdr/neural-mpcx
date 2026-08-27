@@ -206,5 +206,4 @@ def subsevalf(
     """
     if isinstance(expr, np.ndarray):
         return _internal_subsevalf_np(expr, old, new, eval)
-    else:
-        return _internal_subsevalf_cs(expr, old, new, eval)
+    return _internal_subsevalf_cs(expr, old, new, eval)
