@@ -1,0 +1,35 @@
+{
+  "generated_utc": "2026-08-27T11:04:21+00:00",
+  "git_sha": "6326a631b3d6c7f8ea93cbe81a732e3034ab8d1c",
+  "host": "cge001",
+  "platform": "Linux-5.15.0-118-generic-x86_64-with-glibc2.35",
+  "versions": {
+    "python": "3.10.12",
+    "numpy": "2.2.6",
+    "pandas": "2.3.3",
+    "scipy": "1.15.3",
+    "casadi": "3.7.2",
+    "torch": "2.13.0+cu130",
+    "matplotlib": "3.10.9",
+    "joblib": "1.5.3"
+  },
+  "seeding": [
+    "master_seed=20260821",
+    "bench_ids={'cstr': 1, 'cts': 2}",
+    "stream_ids={'noise': 10, 'ic': 20, 'mismatch': 30}",
+    "noise seed = f(benchmark, replicate), paired across all swept factors"
+  ],
+  "experiments": [
+    "exp1",
+    "exp2",
+    "exp3",
+    "exp5"
+  ],
+  "n_jobs": 16,
+  "timing_jobs": 1,
+  "planned_runs": 754,
+  "executed_runs": 754,
+  "skipped_runs": 0,
+  "failed_runs": 0,
+  "wall_seconds": 1690.7
+}

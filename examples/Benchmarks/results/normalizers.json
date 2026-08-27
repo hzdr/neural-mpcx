@@ -1,0 +1,14 @@
+{
+  "cstr": {
+    "iae_tracked": 84.45968366811837,
+    "n_runs": 1,
+    "tracked_variable": "C_B",
+    "unit": "mol$\\cdot$L$^{-1}$*s"
+  },
+  "cts": {
+    "iae_tracked": 1809.2748812063944,
+    "n_runs": 1,
+    "tracked_variable": "h_2",
+    "unit": "m*s"
+  }
+}

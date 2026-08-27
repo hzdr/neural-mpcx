@@ -1,0 +1,70 @@
+{
+  "id": "exp4",
+  "name": "Real-time feasibility",
+  "description": "Solve-time scaling in LSTM hidden size and prediction horizon, against the control period. The timing_critical flag runs these serially after every other experiment has finished; with twenty workers on twenty cores the worst-case latency would measure contention between them. The CSTR sweep includes the physics NMPC under the hidden_size = -1 sentinel, the convention the analysis notebook uses. The two-tank benchmark has no physics-MPC counterpart, so its grid is neural-only, and it starts at 32: the 8- and 16-unit checkpoints fail every solve from this scenario's empty-tank start, and 32/64/128 is the set the CTS analysis notebook covers.",
+  "benchmarks": [
+    "cstr",
+    "cts"
+  ],
+  "timing_critical": true,
+  "group_by": [],
+  "cases": [
+    {
+      "case": "neural_grid_cstr",
+      "benchmarks": [
+        "cstr"
+      ],
+      "sweep": {
+        "hidden_size": [
+          8,
+          16,
+          32,
+          64,
+          128
+        ],
+        "horizon": [
+          10,
+          20,
+          40,
+          80
+        ]
+      }
+    },
+    {
+      "case": "neural_grid_cts",
+      "benchmarks": [
+        "cts"
+      ],
+      "sweep": {
+        "hidden_size": [
+          32,
+          64,
+          128
+        ],
+        "horizon": [
+          10,
+          20,
+          40,
+          80
+        ]
+      }
+    },
+    {
+      "case": "nmpc_grid",
+      "benchmarks": [
+        "cstr"
+      ],
+      "set": {
+        "controller": "nmpc"
+      },
+      "sweep": {
+        "horizon": [
+          10,
+          20,
+          40,
+          80
+        ]
+      }
+    }
+  ]
+}

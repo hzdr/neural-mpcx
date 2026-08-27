@@ -1,0 +1,16 @@
+{
+  "id": "exp5",
+  "name": "Nominal closed-loop performance",
+  "description": "The reference run of each benchmark, configured as the standalone example scripts are. It reproduces the closed-loop performance figure of the paper, and its IAE is the denominator for every normalized IAE in the study, so 1.0 means 'as good as the reported figure' and the two benchmarks share one axis. The absolute values live in results/normalizers.json and belong in the figure captions.",
+  "benchmarks": [
+    "cstr",
+    "cts"
+  ],
+  "timing_critical": false,
+  "group_by": [],
+  "cases": [
+    {
+      "case": "nominal"
+    }
+  ]
+}

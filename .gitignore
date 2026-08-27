@@ -215,3 +215,13 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Benchmark suite: crash-safe intermediates, folded into results/ on completion
+examples/Benchmarks/results/_shards/
+examples/Benchmarks/results_smoke/
+examples/Benchmarks/figures_smoke/
+examples/Benchmarks/tables_smoke/
+
+examples/Running_In_Cluster_README.md
+examples/Benchmarks/rescore.py
+examples/Benchmarks/run_exp.sh

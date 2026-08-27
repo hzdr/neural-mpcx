@@ -1,0 +1,14 @@
+\begin{table}
+\caption{Largest still-acceptable drift per parameter, along the slice with the other parameter at nominal, linearly interpolated from the Latin-hypercube mismatch sample. Acceptable means IAE_norm <= 2. Runs that solved without settling carry their IAE into the interpolation, and the band stops at the edge of the sampled region without extrapolating past it.}
+\label{tab:T3_tolerance_summary}
+\begin{tabular}{llrrl}
+\toprule
+benchmark & parameter & lowest acceptable & highest acceptable & tolerance band \\
+\midrule
+CSTR & alpha & 0.9695 & 1.052 & -3\% to +5\% \\
+CSTR & beta & 0.9039 & 1.191 & -10\% to +19\% \\
+Cascaded two-tank & mismatch\_factor & 0.8815 & 1.174 & -12\% to +17\% \\
+Cascaded two-tank & gain\_mismatch & 0.8264 & 1.198 & -17\% to +20\% \\
+\bottomrule
+\end{tabular}
+\end{table}

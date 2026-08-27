@@ -1,0 +1,184 @@
+{
+  "id": "exp3",
+  "name": "Plant-model mismatch and disturbances",
+  "description": "Mismatch and disturbances answer two different questions. Mismatch measures the envelope: how far the plant may drift from the model the LSTM learned before performance becomes unacceptable. A disturbance step measures the transient: how the loop rejects an unmeasured step and what offset it leaves behind. The mismatch cases perturb the plant alone and both controllers keep a nominal model, so the neural-versus-physics comparison is like-for-like. That comparison covers the CSTR only, since the two-tank benchmark has no physics-MPC counterpart.",
+  "benchmarks": [
+    "cstr",
+    "cts"
+  ],
+  "timing_critical": false,
+  "group_by": [],
+  "cases": [
+    {
+      "case": "mismatch_lhs_cstr",
+      "benchmarks": [
+        "cstr"
+      ],
+      "sample": {
+        "kind": "lhs_params",
+        "n": 40,
+        "params": {
+          "alpha": [
+            0.95,
+            1.05
+          ],
+          "beta": [
+            0.9,
+            1.1
+          ]
+        }
+      }
+    },
+    {
+      "case": "mismatch_lhs_cts",
+      "benchmarks": [
+        "cts"
+      ],
+      "sample": {
+        "kind": "lhs_params",
+        "n": 40,
+        "params": {
+          "mismatch_factor": [
+            0.95,
+            1.05
+          ],
+          "gain_mismatch": [
+            0.95,
+            1.05
+          ]
+        }
+      }
+    },
+    {
+      "case": "envelope_cstr",
+      "benchmarks": [
+        "cstr"
+      ],
+      "sample": {
+        "kind": "lhs_params",
+        "n": 150,
+        "seed_index": 1,
+        "params": {
+          "alpha": [
+            0.9,
+            1.2
+          ],
+          "beta": [
+            0.9,
+            1.2
+          ]
+        }
+      }
+    },
+    {
+      "case": "envelope_cts",
+      "benchmarks": [
+        "cts"
+      ],
+      "sample": {
+        "kind": "lhs_params",
+        "n": 150,
+        "seed_index": 1,
+        "params": {
+          "mismatch_factor": [
+            0.8,
+            1.2
+          ],
+          "gain_mismatch": [
+            0.8,
+            1.2
+          ]
+        }
+      }
+    },
+    {
+      "case": "disturbance_CA0",
+      "benchmarks": [
+        "cstr"
+      ],
+      "set": {
+        "dist_kind": "CA0",
+        "dist_onset": 60,
+        "num_iter": 150
+      },
+      "sweep": {
+        "dist_magnitude": [
+          -0.05,
+          -0.025,
+          0.025,
+          0.05
+        ]
+      }
+    },
+    {
+      "case": "disturbance_Tin",
+      "benchmarks": [
+        "cstr"
+      ],
+      "set": {
+        "dist_kind": "Tin",
+        "dist_onset": 60,
+        "num_iter": 150
+      },
+      "sweep": {
+        "dist_magnitude": [
+          -0.2,
+          -0.1,
+          0.1,
+          0.2
+        ]
+      }
+    },
+    {
+      "case": "disturbance_leak2",
+      "benchmarks": [
+        "cts"
+      ],
+      "set": {
+        "dist_kind": "leak2",
+        "dist_onset": 700
+      },
+      "sweep": {
+        "dist_magnitude": [
+          0.1,
+          0.2,
+          0.3,
+          0.5
+        ]
+      }
+    },
+    {
+      "case": "disturbance_none",
+      "set": {
+        "dist_magnitude": 0.0
+      },
+      "per_benchmark": {
+        "cstr": {
+          "num_iter": 150
+        }
+      }
+    },
+    {
+      "case": "neural_vs_nmpc",
+      "benchmarks": [
+        "cstr"
+      ],
+      "sweep": {
+        "controller": [
+          "neural",
+          "nmpc"
+        ],
+        "alpha": [
+          0.9,
+          1.0,
+          1.1
+        ],
+        "beta": [
+          0.9,
+          1.0,
+          1.1
+        ]
+      }
+    }
+  ]
+}

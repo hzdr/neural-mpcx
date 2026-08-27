@@ -1,0 +1,5 @@
+benchmark,parameter,lowest acceptable,highest acceptable,tolerance band
+CSTR,alpha,0.9695229069452539,1.0522016548937088,-3% to +5%
+CSTR,beta,0.9038523654578278,1.191296948348172,-10% to +19%
+Cascaded two-tank,mismatch_factor,0.8815401151124305,1.1737544494223093,-12% to +17%
+Cascaded two-tank,gain_mismatch,0.8264368656340407,1.197568869586845,-17% to +20%

@@ -1,0 +1,27 @@
+# Copyright 2024-2026 Helmholtz-Zentrum Dresden-Rossendorf e.V. (HZDR)
+# Authors:
+# - Ênio Lopes Júnior
+# - Sebastian Felix Reinecke
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Figure builders, one module per experiment.
+
+Every builder has the same shape::
+
+    def build(metrics, outdir, root=None) -> list[Path]
+
+so ``reproduce_all.py`` can call them uniformly and report what was written.
+A builder whose experiment is absent from the store returns an empty list and
+does not raise, so a partial sweep still produces the figures it can.
+"""

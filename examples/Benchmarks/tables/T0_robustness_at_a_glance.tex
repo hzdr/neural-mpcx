@@ -1,0 +1,18 @@
+\begin{table}
+\caption{Robustness at a glance. Success = no failed solve and the tracked variable inside the +-5 % setpoint band at the end of the run. Violations are expressed as a fraction of each variable's operating range. All aggregates include failed runs.}
+\label{tab:T0_robustness_at_a_glance}
+\begin{tabular}{lllrrrlrrr}
+\toprule
+experiment & benchmark & what varied & N\_total & N\_completed & success\_rate & IAE\_norm [IQR] & worst\_violation & failed\_solves & RTF\_max \\
+\midrule
+exp1 & CSTR & measurement noise sigma & 120 & 118 & 0.9833 & 1.45 [1, 1.92] & 0.1655 & 0 & 0.06009 \\
+exp1 & Cascaded two-tank & measurement noise sigma & 120 & 116 & 0.9667 & 1.1 [1, 1.56] & 0 & 0 & 0.0648 \\
+exp2 & CSTR & initial condition (+-15 \% CSTR, +-50 \% two-tank) & 50 & 50 & 1 & 1 [0.916, 1.14] & 0.08736 & 0 & 0.03902 \\
+exp2 & Cascaded two-tank & initial condition (+-15 \% CSTR, +-50 \% two-tank) & 50 & 50 & 1 & 1.05 [0.995, 1.06] & 0 & 0 & 0.0478 \\
+exp3 & CSTR & plant mismatch and step disturbances & 217 & 213 & 0.9816 & 2.17 [1.53, 2.91] & 0.2019 & 209 & 0.161 \\
+exp3 & Cascaded two-tank & plant mismatch and step disturbances & 195 & 195 & 1 & 1.48 [1.15, 1.92] & 0 & 0 & 0.04243 \\
+exp5 & CSTR & nothing (nominal reference) & 1 & 1 & 1 & 1 [1, 1] & 0 & 0 & 0.01026 \\
+exp5 & Cascaded two-tank & nothing (nominal reference) & 1 & 1 & 1 & 1 [1, 1] & 0 & 0 & 0.01836 \\
+\bottomrule
+\end{tabular}
+\end{table}

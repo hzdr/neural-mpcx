@@ -5,6 +5,52 @@ All notable changes to NeuralMPCX will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.0.3] - 2026-08-27
+
+### Added
+
+- `examples/Benchmarks/`: a reproducible benchmark suite over the CSTR and
+  cascaded-two-tank neural-MPC examples. Five experiments, declared as JSON
+  tables, run in parallel into a Parquet store; a second script rebuilds every
+  figure and table from that store without simulating.
+  - `run_experiments.py` expands `configs/*.json` into run specs and executes
+    them through joblib/loky. A `run_id` digests the whole spec, so `--resume`
+    skips work already in the store and a re-run regenerates the same keys. The
+    driver writes a shard as each batch completes, so an interruption costs at
+    most the batch in flight. `--prune` retracts runs the configs no longer
+    define, `--dry-run` sizes a sweep before it starts, and `--smoke` runs the
+    reduced copies in `configs_smoke/` in about a minute.
+  - `reproduce_all.py` reads `results/` and writes 22 figures and 8 tables into
+    `figures/` and `tables/`. It simulates nothing, so a clone carrying the
+    store reproduces the study's graphics in seconds. `--check` reports store
+    coverage; `--failures` reports where the solver failed and which factor
+    levels separate failure from success.
+  - `bench/` holds the machinery: benchmark descriptors and JSON expansion
+    (`config.py`), the seeding contract with the Latin-hypercube designs
+    (`seeds.py`), the bridge to each example script's `simulate()`
+    (`adapters.py`), the joblib driver (`runner.py`), closed-loop metrics
+    (`metrics.py`), the Parquet store (`store.py`), the publication style
+    (`plotstyle.py`), and one figure and one table module per experiment.
+  - The experiments: measurement noise at six levels with 20 seeded replicates
+    (exp1); initial conditions over a 50-point Latin hypercube per benchmark
+    (exp2); plant-model mismatch and unmeasured step disturbances, with the
+    neural-versus-physics comparison on the CSTR (exp3); solve-time scaling in
+    LSTM hidden size and horizon against the control period (exp4); and the
+    nominal closed-loop run whose IAE normalizes the study (exp5). 790 runs,
+    about 6.2 core-hours on the reference machine.
+  - Two properties carry the paired design. The noise seed depends on `(benchmark, replicate)` and nothing
+    else, and the suite draws each design point once and freezes it into the
+    spec. Failed solves come from the delta of `mpc.failures`, since `solve_mpc`
+    neither raises nor returns a status and `_last_solution` still holds the
+    previous successful solve after a failure.
+  - No aggregate drops a failed run. Every table reports `N_total` beside
+    `N_completed`, every median ranks non-finite values worst, and every figure
+    marks a failed run with an X in a distinct color.
+  - `exp4` carries `timing_critical` and runs at `n_jobs=1` after every other
+    experiment, so its real-time factors measure the controller alone.
+  - An unknown parameter name in a config raises at expansion time and lists the
+    valid fields.
+
 ## [3.0.2] - 2026-08-04
 
 ### Fixed

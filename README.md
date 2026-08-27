@@ -352,6 +352,24 @@ src/neuralmpcx/
 examples/
 ```
 
+### Reproducing the benchmark study
+
+`examples/Benchmarks/` runs five experiments -- measurement-noise sensitivity,
+initial-condition robustness, plant-model mismatch and disturbances, real-time
+feasibility, and nominal closed-loop performance -- across all available cores,
+and regenerates every figure and table from committed results:
+
+```bash
+# regenerate all figures and tables from the stored results (seconds)
+python examples/Benchmarks/reproduce_all.py
+
+# re-run the whole study (hours; --dry-run first to see the plan)
+python examples/Benchmarks/run_experiments.py --all --n-jobs 10
+```
+
+Experiments are declared in `examples/Benchmarks/configs/*.json`. See
+[examples/Benchmarks/README.md](examples/Benchmarks/README.md) for the design,
+the common-random-numbers contract, and how failed runs are accounted for.
 
 ---
 

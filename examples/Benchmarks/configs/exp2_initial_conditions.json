@@ -1,0 +1,18 @@
+{
+  "id": "exp2",
+  "name": "Initial-condition sensitivity",
+  "description": "Robustness over a region of initial states. A neural MPC gives no recursive-feasibility guarantee, so this experiment samples the region: a 50-point Latin hypercube per benchmark, each point run to completion and reported as a success rate and a trajectory fan. The CSTR box spans ±15 % around its nominal steady state [0.2, 0.5, 120, 120]. The two-tank box is centered on the first-setpoint steady state, since ±15 % of the empty-tank state (0, 0) is a single point, and spans ±50 % to cover more of the operating range. Every configuration draws the same design points, so comparisons stay paired.",
+  "benchmarks": ["cstr", "cts"],
+  "timing_critical": false,
+  "group_by": [],
+  "cases": [
+    {
+      "case": "lhs50",
+      "sample": {
+        "kind": "lhs_x0",
+        "n": 50,
+        "fraction": {"cstr": 0.15, "cts": 0.5}
+      }
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "id": "exp1",
+  "name": "Measurement-noise robustness (smoke)",
+  "description": "Smoke-scale copy of exp1: the same code paths and the same cases, over tiny designs and short runs. Use it to check the pipeline before committing a cluster to the full study. A smoke run produces no results.",
+  "benchmarks": [
+    "cstr",
+    "cts"
+  ],
+  "timing_critical": false,
+  "group_by": [],
+  "set": {
+    "use_meas_noise": true
+  },
+  "cases": [
+    {
+      "case": "noise_levels",
+      "sweep": {
+        "noise_sigma_pct": [
+          0,
+          2
+        ]
+      },
+      "replicates": 2
+    }
+  ],
+  "per_benchmark": {
+    "cstr": {
+      "num_iter": 10
+    },
+    "cts": {
+      "num_iter": 30
+    }
+  }
+}

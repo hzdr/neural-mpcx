@@ -1,0 +1,9 @@
+experiment,benchmark,what varied,N_total,N_completed,success_rate,IAE_norm [IQR],worst_violation,failed_solves,RTF_max
+exp1,CSTR,measurement noise sigma,120,118,0.9833333333333333,"1.45 [1, 1.92]",0.16552723220301038,0,0.060094986440769084
+exp1,Cascaded two-tank,measurement noise sigma,120,116,0.9666666666666667,"1.1 [1, 1.56]",0.0,0,0.06479539975407533
+exp2,CSTR,"initial condition (+-15 % CSTR, +-50 % two-tank)",50,50,1.0,"1 [0.916, 1.14]",0.0873643558306178,0,0.039016536165339254
+exp2,Cascaded two-tank,"initial condition (+-15 % CSTR, +-50 % two-tank)",50,50,1.0,"1.05 [0.995, 1.06]",0.0,0,0.047795640013646334
+exp3,CSTR,plant mismatch and step disturbances,217,213,0.9815668202764977,"2.17 [1.53, 2.91]",0.20189690195892332,209,0.1610417907229728
+exp3,Cascaded two-tank,plant mismatch and step disturbances,195,195,1.0,"1.48 [1.15, 1.92]",0.0,0,0.042434397735632956
+exp5,CSTR,nothing (nominal reference),1,1,1.0,"1 [1, 1]",0.0,0,0.010258397669531405
+exp5,Cascaded two-tank,nothing (nominal reference),1,1,1.0,"1 [1, 1]",0.0,0,0.01835889625363052

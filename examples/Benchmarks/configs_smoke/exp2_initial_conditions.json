@@ -1,0 +1,29 @@
+{
+  "id": "exp2",
+  "name": "Initial-condition sensitivity (smoke)",
+  "description": "Smoke-scale copy of exp2: the same code paths and the same case, over a tiny design and short runs. Use it to check the pipeline before committing a cluster to the full study. A smoke run produces no results.",
+  "benchmarks": [
+    "cstr",
+    "cts"
+  ],
+  "timing_critical": false,
+  "group_by": [],
+  "per_benchmark": {
+    "cstr": {
+      "num_iter": 10
+    },
+    "cts": {
+      "num_iter": 30
+    }
+  },
+  "cases": [
+    {
+      "case": "lhs50",
+      "sample": {
+        "kind": "lhs_x0",
+        "n": 4,
+        "fraction": 0.15
+      }
+    }
+  ]
+}

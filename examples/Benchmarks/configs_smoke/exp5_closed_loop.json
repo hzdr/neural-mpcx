@@ -1,0 +1,24 @@
+{
+  "id": "exp5",
+  "name": "Nominal closed-loop (smoke)",
+  "description": "Smoke-scale copy of exp5: the same code paths and the same cases, over tiny designs and short runs. Use it to check the pipeline before committing a cluster to the full study. A smoke run produces no results.",
+  "benchmarks": [
+    "cstr",
+    "cts"
+  ],
+  "timing_critical": false,
+  "group_by": [],
+  "per_benchmark": {
+    "cstr": {
+      "num_iter": 10
+    },
+    "cts": {
+      "num_iter": 30
+    }
+  },
+  "cases": [
+    {
+      "case": "nominal"
+    }
+  ]
+}

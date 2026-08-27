@@ -38,7 +38,9 @@ os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional, Sequence
 import time  # measure computation time
 import gc  # Garbage Collector control
 
@@ -91,6 +93,58 @@ Y_NORM_PARAMS = {
     "T_R": {"min": 0.0, "max": 140.0},
     "T_K": {"min": 0.0, "max": 140.0},
 }
+
+STATE_KEYS = ["C_A", "C_B", "T_R", "T_K"]
+SAMPLE_TIME_S = 18.0  # dt = 0.005 h
+TRACK_INDEX = 1  # C_B is the tracked controlled variable
+
+# Piecewise-constant setpoint schedule, in physical units.
+SETPOINT_VALUES = [[[0.0], [1.0], [0.0], [0.0]]]
+SETPOINT_TIMESTAMPS = [0]
+
+
+@dataclass
+class RunConfig:
+    """Every knob of one closed-loop physics-NMPC run.
+
+    Defaults mirror the module-level constants, so ``RunConfig()`` reproduces
+    exactly what ``python nmpc_cstr.py`` does.
+
+    Notes
+    -----
+    The *controller's* symbolic model deliberately keeps ``alpha = beta = 1``
+    hard-coded: ``alpha`` / ``beta`` here perturb the **plant** only. That is
+    what makes the neural-vs-physics comparison under identical mismatch fair —
+    both controllers hold a nominal model while the plant has drifted.
+    """
+
+    # --- plant/model mismatch (plant only) ----------------------------------
+    alpha: float = ALPHA
+    beta: float = BETA
+
+    # --- controller ---------------------------------------------------------
+    horizon: int = HORIZON
+    shooting: str = _SHOOTING
+    pars_init: Optional[dict] = None  # None -> NMPC.pars_init
+
+    # --- simulation ---------------------------------------------------------
+    num_iter: int = NUM_ITER
+    x0: Optional[Sequence[float]] = None  # None -> CSTRSystem nominal x0
+
+    # --- estimation / measurement -------------------------------------------
+    use_ekf: bool = USE_EKF
+    use_meas_noise: bool = USE_MEAS_NOISE
+    temp_noise_std: float = TEMP_NOISE_STD  # degC on the measured T_R, T_K
+    seed: int = 69
+
+    # --- unmeasured step disturbance (controller is never told) -------------
+    dist_kind: str = "none"  # "none" | "CA0" | "Tin"
+    dist_magnitude: float = 0.0
+    dist_onset: int = 0
+
+    # --- bookkeeping --------------------------------------------------------
+    experiment_id: str = EXPERIMENT_ID
+
 
 class _TqdmLoggingHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
@@ -180,21 +234,28 @@ class CSTRSystem(gym.Env):
     )
     nx = 4
     nu = 2
-    use_meas_noise = USE_MEAS_NOISE
 
-    def __init__(self, dt_hr=0.005):
+    def __init__(self, cfg: "Optional[RunConfig]" = None, dt_hr=0.005):
         """Initialize CSTR system with physical parameters and steady state.
 
         Parameters
         ----------
+        cfg : RunConfig, optional
+            Run configuration. When ``None`` the module-level constants are
+            used, reproducing the pre-refactor behaviour.
         dt_hr : float, optional
             Simulation time step in hours (default 0.005h = 18s).
         """
         super().__init__()
         self.dt = dt_hr
 
-        self.alpha = ALPHA
-        self.beta = BETA
+        cfg = cfg if cfg is not None else RunConfig()
+        self.cfg = cfg
+
+        self.alpha = float(cfg.alpha)
+        self.beta = float(cfg.beta)
+        self.use_meas_noise = bool(cfg.use_meas_noise)
+        self.temp_noise_std = float(cfg.temp_noise_std)
 
         self.K0_ab = 1.287e12
         self.K0_bc = 1.287e12
@@ -216,16 +277,33 @@ class CSTRSystem(gym.Env):
         self.mk = 5.0
         self.Cpk = 2.0
 
-        self.CA0 = (5.7 + 4.5) / 2.0 * 1.0
-        self.Tin = 130.0
+        # Nominal feed conditions. The step disturbance (when enabled) moves
+        # these away from nominal mid-run without telling the controller.
+        self.CA0_nom = (5.7 + 4.5) / 2.0 * 1.0
+        self.Tin_nom = 130.0
+        self.CA0 = self.CA0_nom
+        self.Tin = self.Tin_nom
 
-        self.x0 = np.asarray([0.2, 0.5, 120, 120]).reshape(4, 1)
+        self.x_nom = np.asarray([0.2, 0.5, 120, 120], dtype=np.float64).reshape(4, 1)
+        if cfg.x0 is not None:
+            self.x0 = np.asarray(cfg.x0, dtype=np.float64).reshape(4, 1)
+        else:
+            self.x0 = self.x_nom.copy()
 
         self.action_space = Box(
             low=self.a_bnd[0], high=self.a_bnd[1], dtype=np.float64
         )
 
+        self._k = 0  # simulation step counter, drives the step disturbance
         self.x = self.x0.copy()
+
+    def _apply_disturbance(self):
+        """Set the feed conditions for the current step (unmeasured, unmodelled)."""
+        kind = self.cfg.dist_kind
+        active = kind != "none" and self._k >= self.cfg.dist_onset
+        scale = (1.0 + self.cfg.dist_magnitude) if active else 1.0
+        self.CA0 = self.CA0_nom * (scale if kind == "CA0" else 1.0)
+        self.Tin = self.Tin_nom * (scale if kind == "Tin" else 1.0)
 
     def _denormalize_action(self, u_norm):
         """Convert normalized action to physical units.
@@ -300,7 +378,10 @@ class CSTRSystem(gym.Env):
             Empty info dictionary.
         """
         super().reset(seed=seed)
-        self.x = self.x0
+        self.x = self.x0.copy()
+        self._k = 0
+        self.CA0 = self.CA0_nom
+        self.Tin = self.Tin_nom
         return self._normalize_state(self.x.copy()), {}
 
     def equations(self, x, u):
@@ -379,6 +460,8 @@ class CSTRSystem(gym.Env):
         action = np.clip(action, self.a_bnd[0], self.a_bnd[1])
         u_phys = self._denormalize_action(action)
 
+        self._apply_disturbance()
+
         k1 = self.equations(self.x, u_phys)
         k2 = self.equations(self.x + 0.5 * self.dt * k1, u_phys)
         k3 = self.equations(self.x + 0.5 * self.dt * k2, u_phys)
@@ -390,6 +473,8 @@ class CSTRSystem(gym.Env):
         self.x[1] = np.clip(self.x[1], 0, 20)
         self.x[2] = np.clip(self.x[2], 0, 200)
         self.x[3] = np.clip(self.x[3], 0, 200)
+
+        self._k += 1
 
         return self._normalize_state(self.x.copy()), 0.0, False, False, {}
 
@@ -409,7 +494,7 @@ class CSTRSystem(gym.Env):
         y_phys = self.x[MEAS_INDICES].copy()
         if self.use_meas_noise:
             y_phys = y_phys + self.np_random.normal(
-                0.0, TEMP_NOISE_STD, size=(len(MEAS_INDICES), 1)
+                0.0, self.temp_noise_std, size=(len(MEAS_INDICES), 1)
             )
             y_phys = np.clip(y_phys, 0.0, 200.0)
 
@@ -525,7 +610,7 @@ class NMPC(Mpc[cs.MX]):
         "u_scaling": np.asarray([1, 1], dtype=float),
     }
 
-    def __init__(self) -> None:
+    def __init__(self, cfg: "Optional[RunConfig]" = None) -> None:
         """Initialize NMPC problem with explicit CSTR dynamics.
 
         Sets up the optimal control problem including:
@@ -549,7 +634,17 @@ class NMPC(Mpc[cs.MX]):
         - Hard constraints enforced on C_A, C_B, and T_K indices
         - Control effort penalized via delta_u in cost function
         """
-        N = self.horizon
+        # cfg wins when supplied; otherwise fall back to the class attributes.
+        if cfg is None:
+            horizon = self.horizon
+            shooting = _SHOOTING
+            pars_init = self.pars_init
+        else:
+            horizon = int(cfg.horizon)
+            shooting = cfg.shooting
+            pars_init = cfg.pars_init if cfg.pars_init is not None else self.pars_init
+
+        N = horizon
         gamma = self.discount_factor
 
         nx, nu = CSTRSystem.nx, CSTRSystem.nu
@@ -559,11 +654,14 @@ class NMPC(Mpc[cs.MX]):
         super().__init__(
             nlp,
             N,
-            tuning_parameters=self.pars_init,
+            tuning_parameters=pars_init,
             n_context=self.n_context,
-            shooting=_SHOOTING,
+            shooting=shooting,
             neural=False
         )
+
+        self.horizon = horizon
+        self.shooting = shooting
 
         x_lb = self.parameter("x_lb", (nx, 1))
         x_ub = self.parameter("x_ub", (nx, 1))
@@ -670,7 +768,7 @@ class NMPC(Mpc[cs.MX]):
 
         self.set_dynamics(F=F_casadi, n_in=nu, n_out=nx)
 
-        if _SHOOTING == "single":
+        if shooting == "single":
             # Single shooting: state() returned None; the trajectory exists only
             # after set_dynamics builds it by forward simulation. Re-bind x to it.
             x = self.states["x"]
@@ -723,101 +821,121 @@ class NMPC(Mpc[cs.MX]):
         self.init_solver(opts, solver="ipopt")
 
 
-if __name__ == "__main__":
+def get_current_setpoint(timestep: int) -> np.ndarray:
+    """Get the most recent setpoint for a given timestep.
 
-    def get_current_setpoint(timestep: int) -> np.ndarray:
-        """Get the most recent setpoint for a given timestep.
+    Parameters
+    ----------
+    timestep : int
+        Current simulation timestep.
 
-        Parameters
-        ----------
-        timestep : int
-            Current simulation timestep.
+    Returns
+    -------
+    np.ndarray
+        Setpoint vector [C_A, C_B, T_R, T_K] in physical units, shape (4,).
 
-        Returns
-        -------
-        np.ndarray
-            Setpoint vector [C_A, C_B, T_R, T_K] in physical units, shape (4,).
+    Notes
+    -----
+    Uses a piecewise constant schedule. Returns the most recent setpoint
+    whose timestamp does not exceed the current timestep.
+    """
+    idx = max(
+        i
+        for i in range(len(SETPOINT_TIMESTAMPS))
+        if SETPOINT_TIMESTAMPS[i] <= timestep
+    )
+    return np.asarray(SETPOINT_VALUES[idx])
 
-        Notes
-        -----
-        Uses a piecewise constant schedule. Returns the most recent setpoint
-        whose timestamp does not exceed the current timestep.
-        """
-        idx = max(
-            i
-            for i in range(len(setpoint_timestamps))
-            if setpoint_timestamps[i] <= timestep
-        )
-        return np.asarray(setpoint_values[idx])
+def normalize_vector(v_phys):
+    """Normalize a state vector to [0, 1] using Y_NORM_PARAMS.
 
-    def normalize_vector(v_phys):
-        """Normalize a state vector to [0, 1] using Y_NORM_PARAMS.
+    Parameters
+    ----------
+    v_phys : np.ndarray
+        Physical state [C_A, C_B, T_R, T_K], shape (4,) or (4, 1).
 
-        Parameters
-        ----------
-        v_phys : np.ndarray
-            Physical state [C_A, C_B, T_R, T_K], shape (4,) or (4, 1).
+    Returns
+    -------
+    np.ndarray
+        Normalized state in [0, 1], shape (4,) or (4, 1).
 
-        Returns
-        -------
-        np.ndarray
-            Normalized state in [0, 1], shape (4,) or (4, 1).
+    Examples
+    --------
+    >>> v_phys = np.array([1.5, 1.0, 100.0, 100.0])
+    >>> v_norm = normalize_vector(v_phys)
+    >>> v_norm
+    array([0.294, 0.196, 0.714, 0.714])
+    """
+    v_norm = np.zeros_like(v_phys)
+    for i, key in enumerate(STATE_KEYS):
+        p_min = Y_NORM_PARAMS[key]["min"]
+        p_max = Y_NORM_PARAMS[key]["max"]
+        v_norm[i] = (v_phys[i] - p_min) / (p_max - p_min)
+    return v_norm
 
-        Examples
-        --------
-        >>> v_phys = np.array([1.5, 1.0, 100.0, 100.0])
-        >>> v_norm = normalize_vector(v_phys)
-        >>> v_norm
-        array([0.294, 0.196, 0.714, 0.714])
-        """
-        v_norm = np.zeros_like(v_phys)
-        keys = ["C_A", "C_B", "T_R", "T_K"]
-        for i, key in enumerate(keys):
-            p_min = Y_NORM_PARAMS[key]["min"]
-            p_max = Y_NORM_PARAMS[key]["max"]
-            v_norm[i] = (v_phys[i] - p_min) / (p_max - p_min)
-        return v_norm
+MAX_SEED = np.iinfo(np.uint32).max + 1
 
-    MAX_SEED = np.iinfo(np.uint32).max + 1
+def mk_seed(rng: np.random.Generator) -> int:
+    """Generate a random seed from a NumPy random generator.
 
-    def mk_seed(rng: np.random.Generator) -> int:
-        """Generate a random seed from a NumPy random generator.
+    Parameters
+    ----------
+    rng : np.random.Generator
+        NumPy random generator instance.
 
-        Parameters
-        ----------
-        rng : np.random.Generator
-            NumPy random generator instance.
+    Returns
+    -------
+    int
+        Random seed in the range [0, 2**32).
 
-        Returns
-        -------
-        int
-            Random seed in the range [0, 2**32).
+    Examples
+    --------
+    >>> rng = np.random.default_rng(42)
+    >>> seed = mk_seed(rng)
+    >>> 0 <= seed < 2**32
+    True
+    """
+    return int(rng.integers(MAX_SEED))
 
-        Examples
-        --------
-        >>> rng = np.random.default_rng(42)
-        >>> seed = mk_seed(rng)
-        >>> 0 <= seed < 2**32
-        True
-        """
-        return int(rng.integers(MAX_SEED))
 
-    simulation_time = NUM_ITER
-    mpc = NMPC()
-    env = CSTRSystem()
+def simulate(cfg: "Optional[RunConfig]" = None, progress: bool = False) -> dict:
+    """Run one closed-loop physics-NMPC simulation and return its trajectories.
+
+    Shared entry point for ``python nmpc_cstr.py`` and the parallel experiment
+    runner. Never plots, never writes files.
+
+    Parameters
+    ----------
+    cfg : RunConfig, optional
+        Run configuration; ``None`` means the module defaults.
+    progress : bool, optional
+        Show a per-step tqdm bar.
+
+    Returns
+    -------
+    dict
+        ``X``, ``X_pred``, ``U``, ``SP``, ``exec_ms``, ``solve_ok``,
+        ``n_failed_solves``, ``n_solves``, and when the EKF is enabled
+        ``X_est`` and ``Y_MEAS``.
+    """
+    cfg = cfg if cfg is not None else RunConfig()
+
+    simulation_time = int(cfg.num_iter)
+    mpc = NMPC(cfg)
+    env = CSTRSystem(cfg)
 
     ekf = None
-    if USE_EKF:
+    if cfg.use_ekf:
         # Only temperatures are measured online: y = C_meas @ x
         C_meas = np.array(
             [[0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]], dtype=np.float64
         )
         # Measurement noise variance in normalized units (R floored when the
         # injected noise is disabled to keep the filter well-conditioned)
-        meas_std_norm = TEMP_NOISE_STD / (
+        meas_std_norm = cfg.temp_noise_std / (
             Y_NORM_PARAMS["T_R"]["max"] - Y_NORM_PARAMS["T_R"]["min"]
         )
-        R_meas = np.eye(2) * (meas_std_norm**2 if USE_MEAS_NOISE else 1e-8)
+        R_meas = np.eye(2) * (meas_std_norm**2 if cfg.use_meas_noise else 1e-8)
         # Initial concentration estimates are deliberately wrong (true x0 is
         # [0.2, 0.5, 120, 120]) to show the EKF reconstructing the unmeasured
         # states from the temperature measurements
@@ -833,90 +951,118 @@ if __name__ == "__main__":
             P0=np.diag([5e-2, 5e-2, 1e-3, 1e-3]),
         )
 
-    setpoint_values = [[[0.0], [1.0], [0.0], [0.0]]]
-    setpoint_timestamps = [0]
-
     state_indices = [0, 1, 2, 3]
 
-    rng = np.random.default_rng(69)
+    rng = np.random.default_rng(cfg.seed)
     state, _ = env.reset(seed=mk_seed(rng), options=None)
 
     # The controller feedback is the EKF estimate when enabled, otherwise the
     # true plant state (idealized full-state feedback)
-    state_fb = ekf.x_est if USE_EKF else state
+    state_fb = ekf.x_est if cfg.use_ekf else state
 
     X, U, SP, X_pred = [state], [], [], []
-    X_est = [ekf.x_est.flatten()] if USE_EKF else []
+    X_est = [ekf.x_est.flatten()] if cfg.use_ekf else []
     Y_MEAS = []
 
     exec_times_ms = []
+    solve_ok = []
 
     vals0 = None
     input_bias = None
     store_solution = True
 
     timestep = 0
-    setpoint = np.zeros_like(setpoint_values[0])
 
     gc.disable()
 
     try:
-        with tqdm(total=simulation_time, desc="MPC Simulation", unit="step", ncols=80, colour="green") as pbar:
-            for t in range(simulation_time):
-                sp_phys = get_current_setpoint(timestep)
-                sp = normalize_vector(sp_phys)
+        pbar = (
+            tqdm(total=simulation_time, desc="MPC Simulation", unit="step",
+                 ncols=80, colour="green")
+            if progress
+            else None
+        )
+        for _t in range(simulation_time):
+            sp_phys = get_current_setpoint(timestep)
+            sp = normalize_vector(sp_phys)
 
-                t0 = time.perf_counter()
-                u_opt = mpc.solve_mpc(
-                    state=state_fb,
-                    state_indices=state_indices,
-                    setpoint=sp,
-                    input_bias=input_bias,
-                    vals0=vals0,
-                    store_solution=store_solution,
-                )
-                t1 = time.perf_counter()
+            failures_before = mpc.failures
+            t0 = time.perf_counter()
+            u_opt = mpc.solve_mpc(
+                state=state_fb,
+                state_indices=state_indices,
+                setpoint=sp,
+                input_bias=input_bias,
+                vals0=vals0,
+                store_solution=store_solution,
+            )
+            t1 = time.perf_counter()
+            ok = mpc.failures == failures_before
 
-                exec_times_ms.append((t1 - t0) * 1000.0)
-                obs, _, _, _, _ = env.step(np.asarray(u_opt))
-                state = obs
+            exec_times_ms.append((t1 - t0) * 1000.0)
+            solve_ok.append(ok)
+            obs, _, _, _, _ = env.step(np.asarray(u_opt))
 
-                if USE_EKF:
-                    y_meas = env.measure()
-                    ekf.predict(u=u_opt)
-                    ekf.update(y=y_meas)
-                    state_fb = ekf.x_est
-                    X_est.append(ekf.x_est.flatten())
-                    Y_MEAS.append(np.asarray(y_meas).flatten())
-                else:
-                    state_fb = obs
+            if cfg.use_ekf:
+                y_meas = env.measure()
+                ekf.predict(u=u_opt)
+                ekf.update(y=y_meas)
+                state_fb = ekf.x_est
+                X_est.append(ekf.x_est.flatten())
+                Y_MEAS.append(np.asarray(y_meas).flatten())
+            else:
+                state_fb = obs
 
-                if mpc._last_solution is not None:
-                    if _SHOOTING == "single":
-                        # Single shooting: x is a derived expression (not a primal
-                        # variable), so evaluate it at the solution.
-                        x_pred_traj = mpc._last_solution.value(mpc.states["x"])
-                        X_pred.append(
-                            np.asarray(x_pred_traj[:, mpc._n_context])
-                        )
-                    else:
-                        X_pred.append(
-                        np.asarray(mpc._last_solution.vals["x"][:, mpc._n_context])
-                    )
+            if ok and mpc._last_solution is not None:
+                if mpc.shooting == "single":
+                    # Single shooting: x is a derived expression (not a primal
+                    # variable), so evaluate it at the solution.
+                    x_pred_traj = mpc._last_solution.value(mpc.states["x"])
+                    X_pred.append(np.asarray(x_pred_traj[:, mpc._n_context]))
                 else:
                     X_pred.append(
-                        np.asarray([np.nan, np.nan, np.nan, np.nan]).reshape(4, 1)
+                        np.asarray(mpc._last_solution.vals["x"][:, mpc._n_context])
                     )
+            else:
+                X_pred.append(np.full((4, 1), np.nan))
 
-                X.append(obs.copy())
-                U.append(u_opt)
-                SP.append(sp.copy())
-                timestep += 1
+            X.append(obs.copy())
+            U.append(u_opt)
+            SP.append(sp.copy())
+            timestep += 1
+            if pbar is not None:
                 pbar.update(1)
                 pbar.set_postfix({"solver_ms": f"{exec_times_ms[-1]:.1f}"})
+        if pbar is not None:
+            pbar.close()
     finally:
         gc.enable()
 
+    solve_ok_arr = np.asarray(solve_ok, dtype=bool)
+    out = {
+        "X": np.squeeze(np.array(X)),
+        "X_pred": np.squeeze(np.array(X_pred)),
+        "U": np.squeeze(np.array(U)),
+        "SP": np.squeeze(np.array(SP)),
+        "exec_ms": np.asarray(exec_times_ms, dtype=np.float64),
+        "solve_ok": solve_ok_arr,
+        "n_failed_solves": int((~solve_ok_arr).sum()),
+        "n_solves": int(solve_ok_arr.size),
+    }
+    if cfg.use_ekf:
+        out["X_est"] = np.asarray(X_est)
+        out["Y_MEAS"] = np.asarray(Y_MEAS)
+    return out
+
+
+if __name__ == "__main__":
+
+    result = simulate(RunConfig(), progress=True)
+    X, X_pred = result["X"], result["X_pred"]
+    U, SP = result["U"], result["SP"]
+    exec_times_ms = list(result["exec_ms"])
+    X_est = result.get("X_est", [])
+    Y_MEAS = result.get("Y_MEAS", [])
 
     X = np.squeeze(np.array(X))
     X_pred = np.squeeze(np.array(X_pred))

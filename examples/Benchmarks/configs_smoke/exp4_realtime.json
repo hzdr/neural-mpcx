@@ -1,0 +1,68 @@
+{
+  "id": "exp4",
+  "name": "Real-time feasibility (smoke)",
+  "description": "Smoke-scale copy of exp4: the same code paths and the same cases, over tiny designs and short runs. Use it to check the pipeline before committing a cluster to the full study. A smoke run produces no results.",
+  "benchmarks": [
+    "cstr",
+    "cts"
+  ],
+  "timing_critical": true,
+  "group_by": [],
+  "per_benchmark": {
+    "cstr": {
+      "num_iter": 10
+    },
+    "cts": {
+      "num_iter": 30
+    }
+  },
+  "cases": [
+    {
+      "case": "neural_grid_cstr",
+      "benchmarks": [
+        "cstr"
+      ],
+      "sweep": {
+        "hidden_size": [
+          8,
+          16
+        ],
+        "horizon": [
+          10,
+          20
+        ]
+      }
+    },
+    {
+      "case": "neural_grid_cts",
+      "benchmarks": [
+        "cts"
+      ],
+      "sweep": {
+        "hidden_size": [
+          32,
+          128
+        ],
+        "horizon": [
+          10,
+          20
+        ]
+      }
+    },
+    {
+      "case": "nmpc_grid",
+      "benchmarks": [
+        "cstr"
+      ],
+      "set": {
+        "controller": "nmpc"
+      },
+      "sweep": {
+        "horizon": [
+          10,
+          20
+        ]
+      }
+    }
+  ]
+}

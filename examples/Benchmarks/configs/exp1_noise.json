@@ -1,0 +1,30 @@
+{
+  "id": "exp1",
+  "name": "Measurement-noise robustness",
+  "description": "Six noise levels, 20 seeded realizations each, at the nominal context length. Sigma is a percentage of each measured variable's operating range, so one axis serves both benchmarks.",
+  "benchmarks": [
+    "cstr",
+    "cts"
+  ],
+  "timing_critical": false,
+  "group_by": [],
+  "set": {
+    "use_meas_noise": true
+  },
+  "cases": [
+    {
+      "case": "noise_levels",
+      "sweep": {
+        "noise_sigma_pct": [
+          0,
+          0.1,
+          0.5,
+          1,
+          2,
+          5
+        ]
+      },
+      "replicates": 20
+    }
+  ]
+}

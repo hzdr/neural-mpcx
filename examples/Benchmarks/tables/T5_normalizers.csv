@@ -1,0 +1,3 @@
+benchmark,tracked variable,nominal IAE,unit,runs
+CSTR,C_B,84.45968366811837,mol$\cdot$L$^{-1}$*s,1
+Cascaded two-tank,h_2,1809.2748812063944,m*s,1
