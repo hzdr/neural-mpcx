@@ -51,6 +51,42 @@ LAYOUTS = {
 FIGSIZES = {"cstr": (7.0, 8.25), "cts": (6.0, 7.0)}
 
 
+def draw_nominal(ax, ax_u, row, bench, ts) -> dict:
+    """Draw the nominal run as a tracked-state-over-input pair.
+
+    The full :func:`_performance` figure paints every state; a panel beside the
+    three fans needs the one variable they all show.
+    """
+    t = ts["time_s"].to_numpy()
+    tracked = bench.state_keys[bench.track_index]
+    ax.plot(t, ts[tracked], color=ps.COLOR_PLANT, linewidth=1.8, zorder=4,
+            label="plant")
+    pred = f"{tracked}_pred"
+    if pred in ts:
+        ax.plot(t, ts[pred], color=ps.COLOR_PRED, linestyle=":", linewidth=1.2,
+                zorder=3, label="prediction")
+    ax.plot(t, ts["sp"], color=ps.COLOR_SP, linestyle="--", linewidth=1.2,
+            zorder=5, label="setpoint")
+    ax.set_ylabel(f"{bench.state_labels[bench.track_index]} "
+                  f"[{bench.state_units[bench.track_index]}]")
+    ps.shade_inadmissible(ax, bench.x_lower[bench.track_index],
+                          bench.x_upper[bench.track_index])
+
+    ax_u.step(t, ts[bench.action_keys[0]], where="post", color=ps.COLOR_PRED,
+              linewidth=1.2, zorder=4)
+    ax_u.set_ylabel(f"{bench.action_labels[0]} [{bench.action_units[0]}]")
+    ax_u.set_xlabel("time [s]")
+    ps.finish(ax, legend=False)
+    ps.finish(ax_u, legend=False)
+
+    return {
+        "mappable": None,
+        "iae": float(row["iae_tracked"]),
+        "unit": bench.state_units[bench.track_index],
+        "n_steps": int(row["n_steps"]),
+    }
+
+
 def _performance(frame, bench, outdir, root) -> List[Path]:
     if not _store.has_timeseries(EXPERIMENT, bench.key, root=root):
         return []

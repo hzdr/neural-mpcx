@@ -6,7 +6,7 @@ study is rebuilt from that store without simulating anything.
 
 ## What it produces
 
-`reproduce_all.py` writes 22 figures to `figures/` (PDF and SVG) and 8 tables to
+`reproduce_all.py` writes 25 figures to `figures/` (PDF and SVG) and 10 tables to
 `tables/` (CSV and a LaTeX fragment).
 
 | figure | what it shows |
@@ -23,14 +23,18 @@ study is rebuilt from that store without simulating anything.
 | `exp3_neural_vs_nmpc_cstr` | neural against physics MPC under identical mismatch |
 | `exp4_rtf_wcet_{cstr,cts}` | worst-case real-time factor against horizon |
 | `exp5_closed_loop_{cstr,cts}` | nominal closed-loop performance |
+| `combined_fan_{cstr,cts}` | one benchmark's four closed-loop views, lettered (a)-(d) |
+| `combined_envelope` | both benchmarks' mismatch maps, lettered (a)-(d) |
 
 | table | what it holds |
 |-------|---------------|
 | `T0_robustness_at_a_glance` | one row per experiment and benchmark |
+| `T1_measurement_noise` | one row per benchmark and noise level |
 | `T2_initial_condition_summary` | initial-condition robustness per benchmark |
 | `T2_worst_initial_conditions` | the five hardest starts, with their initial states |
 | `T3_mismatch_and_disturbance_cases` | every mismatch and disturbance case |
 | `T3_tolerance_summary` | how far each plant parameter may drift |
+| `T4_rtf_wcet_grid` | worst-case real-time factor, hidden size by horizon |
 | `T4_real_time_feasibility` | the full solve-time distribution |
 | `T5_normalizers` | the absolute IAE behind every normalized number |
 | `T6_solver_failures` | where the solver failed, and how badly |
@@ -42,7 +46,7 @@ the same code paths and the same cases over tiny designs and short simulations:
 
 ```bash
 python examples/Benchmarks/run_experiments.py --all --smoke   # 64 runs, ~75 s on 8 cores
-python examples/Benchmarks/reproduce_all.py --smoke           # 22 figures + 8 tables, ~20 s
+python examples/Benchmarks/reproduce_all.py --smoke           # 25 figures + 10 tables, ~20 s
 ```
 
 It reads `configs_smoke/` and writes to `results_smoke/`, `figures_smoke/` and
@@ -58,7 +62,7 @@ python examples/Benchmarks/reproduce_all.py
 ```
 
 This reads the committed `results/` and simulates nothing, so a fresh clone
-rebuilds all 22 figures and 8 tables in seconds.
+rebuilds all 25 figures and 10 tables in seconds.
 
 Two other modes report on the store without drawing: `--check` gives its
 coverage per experiment, and `--failures` gives the severity of every solver
@@ -92,7 +96,7 @@ one its own `--out` and its own `--only`/`--config-dir` slice, then consolidate.
 
 Other flags: `--only exp1 exp4`, `--limit 20` (calibration), `--force`
 (re-simulate), `--prune` (see below), `--batch-size` (how often a crash-safe
-shard is written).
+shard is written), `--host-label` (name this machine in the provenance record).
 
 ## The five experiments
 
@@ -121,7 +125,8 @@ bench/
   metrics.py         IAE, total variation, settling, offset, recovery, violations, RTF
   store.py           the Parquet store
   plotstyle.py       the publication style, from the analysis notebooks
-  figures/, tables/  one module per experiment
+  figures/, tables/  one module per experiment, plus figures/combined.py for
+                     the figures that span several
 ```
 
 The simulations stay in the example scripts (`examples/CSTR/neural_mpc_cstr.py`,
@@ -168,13 +173,29 @@ empty-tank start.
 `n_jobs=1` after everything else. Ten workers contending for ten cores would
 measure contention between them. `--timing-jobs N` overrides it.
 
+**A store can be assembled on more than one machine.** `--check` prints one line
+per sweep, so run it before quoting a solve time across experiments:
+
+```bash
+python examples/Benchmarks/reproduce_all.py --check
+```
+
+`RUNINFO.json` appends one record per sweep and never rewrites an older one.
+
+```bash
+python examples/Benchmarks/run_experiments.py --all --host-label "cluster node"
+```
+
 **Normalized IAE.** Every IAE is divided by the nominal (`exp5`) run of its own
 benchmark, so `1.0` means "as good as the reported figure" and both benchmarks
 share one axis. The absolute values live in `results/normalizers.json` and in
 `tables/T5_normalizers.csv`; they belong in the captions.
 
 **No aggregate drops a failed run.** `completed = no failed solve and the tracked
-variable inside the ±5 % band at the end of the run`. Every table reports
+variable inside the ±50 % band at the end of the run`. Three band widths appear
+in this suite and they are not interchangeable: `reached_band` and so `completed`
+use ±50 % (`metrics.reached_band`, `band_frac=0.5`), `settling_steps` uses ±25 %,
+and `recovery_steps` uses ±5 %. Every table reports
 `N_total` beside `N_completed`, every median is taken over all runs with
 non-finite values ranked worst, and every figure marks a failed run with an X in
 a distinct color.

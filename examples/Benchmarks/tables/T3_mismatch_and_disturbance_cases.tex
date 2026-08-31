@@ -5,16 +5,16 @@
 \toprule
 benchmark & case & median offset & median recovery [steps] & N\_total & N\_completed & success\_rate & IAE\_norm\_median & IAE\_norm\_q1 & IAE\_norm\_q3 & IAE\_norm\_worst & worst\_violation & violation\_rate & failed\_solves & RTF\_max \\
 \midrule
-CSTR & disturbance\_CA0 & -0.0271 & 0 & 4 & 4 & 1 & 1.519 & 1.171 & 1.923 & 2.168 & 0 & 0 & 0 & 0.01594 \\
-CSTR & disturbance\_Tin & 0.02632 & 0 & 4 & 3 & 0.75 & 2.152 & 1.967 & 2.869 & 4.916 & 0.2019 & 0.4367 & 71 & 0.161 \\
-CSTR & disturbance\_none & -0.02693 & NaN & 1 & 1 & 1 & 1.516 & 1.516 & 1.516 & 1.516 & 0 & 0 & 0 & 0.01463 \\
-CSTR & envelope\_cstr & 0.1135 & NaN & 150 & 150 & 1 & 2.521 & 1.782 & 3.071 & 4.775 & 0.1476 & 0.3528 & 0 & 0.05941 \\
-CSTR & mismatch\_lhs\_cstr & -0.02862 & NaN & 40 & 40 & 1 & 1.677 & 1.253 & 1.969 & 2.998 & 0.07701 & 0.3625 & 0 & 0.07494 \\
-CSTR & neural\_vs\_nmpc & -0.01459 & NaN & 18 & 15 & 0.8333 & 2.439 & 1.431 & 3.716 & 5.183 & 0.1711 & 0.3583 & 138 & 0.06551 \\
-Cascaded two-tank & disturbance\_leak2 & -0.4371 & 0 & 4 & 4 & 1 & 1.263 & 1.195 & 1.341 & 1.445 & 0 & 0 & 0 & 0.02122 \\
-Cascaded two-tank & disturbance\_none & -0.1092 & NaN & 1 & 1 & 1 & 1 & 1 & 1 & 1 & 0 & 0 & 0 & 0.01996 \\
-Cascaded two-tank & envelope\_cts & -0.137 & NaN & 150 & 150 & 1 & 1.69 & 1.252 & 2.077 & 3.215 & 0 & 0 & 0 & 0.04243 \\
-Cascaded two-tank & mismatch\_lhs\_cts & -0.1142 & NaN & 40 & 40 & 1 & 1.084 & 1.008 & 1.236 & 1.477 & 0 & 0 & 0 & 0.0399 \\
+CSTR & disturbance\_CA0 & -0.0271 & 0 & 4 & 4 & 1 & 1.519 & 1.171 & 1.923 & 2.168 & 0 & 0 & 0 & 0.03264 \\
+CSTR & disturbance\_Tin & 0.02632 & inf & 4 & 3 & 0.75 & 2.152 & 1.967 & 2.869 & 4.916 & 0.2019 & 0.4367 & 71 & 0.1199 \\
+CSTR & disturbance\_none & -0.02693 & NaN & 1 & 1 & 1 & 1.516 & 1.516 & 1.516 & 1.516 & 0 & 0 & 0 & 0.0301 \\
+CSTR & envelope\_cstr & 0.1135 & NaN & 150 & 150 & 1 & 2.521 & 1.782 & 3.071 & 4.775 & 0.1476 & 0.3528 & 0 & 0.09044 \\
+CSTR & mismatch\_lhs\_cstr & -0.02862 & NaN & 40 & 40 & 1 & 1.677 & 1.253 & 1.969 & 2.998 & 0.07701 & 0.3625 & 0 & 0.07924 \\
+CSTR & neural\_vs\_nmpc & -0.01459 & NaN & 18 & 15 & 0.8333 & 2.439 & 1.431 & 3.715 & 5.183 & 0.1711 & 0.3583 & 139 & 0.1544 \\
+Cascaded two-tank & disturbance\_leak2 & -0.4371 & NaN & 4 & 4 & 1 & 1.263 & 1.195 & 1.341 & 1.445 & 0 & 0 & 0 & 0.07927 \\
+Cascaded two-tank & disturbance\_none & -0.1092 & NaN & 1 & 1 & 1 & 1 & 1 & 1 & 1 & 0 & 0 & 0 & 0.06508 \\
+Cascaded two-tank & envelope\_cts & -0.137 & NaN & 150 & 150 & 1 & 1.69 & 1.252 & 2.077 & 3.215 & 0 & 0 & 0 & 0.1753 \\
+Cascaded two-tank & mismatch\_lhs\_cts & -0.1142 & NaN & 40 & 40 & 1 & 1.084 & 1.008 & 1.236 & 1.477 & 0 & 0 & 0 & 0.1535 \\
 \bottomrule
 \end{tabular}
 \end{table}

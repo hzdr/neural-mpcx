@@ -89,22 +89,12 @@ def _mismatch_distance(frame, bench) -> np.ndarray:
     return np.linalg.norm(offsets, axis=1)
 
 
-def _fan(frame, bench, outdir, root) -> List[Path]:
-    """Every mismatch trajectory at once, colored by distance from nominal."""
-    lhs = frame[frame["case"].str.startswith("mismatch_lhs")]
-    if lhs.empty or not _store.has_timeseries(EXPERIMENT, bench.key, root=root):
-        return []
-
-    ts = _store.load_timeseries(EXPERIMENT, bench.key, lhs["run_id"], root=root)
+def draw_fan(ax, ax_u, lhs, bench, ts) -> dict | None:
+    """Draw the mismatch fan onto a supplied state axis and input axis."""
     tracked = bench.state_keys[bench.track_index]
     dist = _mismatch_distance(lhs, bench)
     norm = Normalize(vmin=float(dist.min()), vmax=float(dist.max()))
     cmap = ps.trace_cmap()
-
-    fig, (ax, ax_u) = plt.subplots(
-        2, 1, figsize=(6.0, 5.4), sharex=True,
-        gridspec_kw={"height_ratios": [2.0, 1.0]},
-    )
 
     curves = []
     for run_id, d in zip(lhs["run_id"], dist):
@@ -118,8 +108,7 @@ def _fan(frame, bench, outdir, root) -> List[Path]:
         curves.append(run[tracked].to_numpy())
 
     if not curves:
-        plt.close(fig)
-        return []
+        return None
 
     n = min(len(c) for c in curves)
     stack = np.vstack([c[:n] for c in curves])
@@ -136,26 +125,54 @@ def _fan(frame, bench, outdir, root) -> List[Path]:
                   f"[{bench.state_units[bench.track_index]}]")
     ps.shade_inadmissible(ax, bench.x_lower[bench.track_index],
                           bench.x_upper[bench.track_index])
-    p0, p1 = MISMATCH_PARAMS[bench.key]
-    ax.set_title(f"{bench.label}: {len(lhs)} mismatched plants", fontsize=10)
-    ps.finish(ax)
-
     ax_u.set_ylabel(f"{bench.action_labels[0]} [{bench.action_units[0]}]")
     ax_u.set_xlabel("time [s]")
+    ps.finish(ax, legend=False)
     ps.finish(ax_u, legend=False)
 
-    sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
-    fig.colorbar(sm, ax=[ax, ax_u],
-                 label=r"$\|(p_0, p_1) - (1, 1)\|$", fraction=0.04, pad=0.02)
+    p0, p1 = MISMATCH_PARAMS[bench.key]
+    return {
+        "mappable": plt.cm.ScalarMappable(norm=norm, cmap=cmap),
+        "cbar_label": r"$\|(p_0, p_1) - (1, 1)\|$",
+        "params": (p0, p1),
+        "n_total": len(lhs),
+        "n_completed": int(lhs["completed"].sum()),
+    }
 
-    n_done = int(lhs["completed"].sum())
-    ps.caption(
-        fig,
+
+def _fan_caption_text(info) -> str:
+    """The mismatch fan's caption, shared by the standalone and combined figures."""
+    p0, p1 = info["params"]
+    return (
         f"Color is how far the plant has drifted from the model "
         f"($p_0$ = {p0}, $p_1$ = {p1}). The controller holds the nominal model "
         f"throughout and receives no measurement of the drift. "
-        f"N_total = {len(lhs)}, N_completed = {n_done}.",
+        f"N_total = {info['n_total']}, N_completed = {info['n_completed']}."
     )
+
+
+def _fan(frame, bench, outdir, root) -> List[Path]:
+    """Every mismatch trajectory at once, colored by distance from nominal."""
+    lhs = frame[frame["case"].str.startswith("mismatch_lhs")]
+    if lhs.empty or not _store.has_timeseries(EXPERIMENT, bench.key, root=root):
+        return []
+
+    ts = _store.load_timeseries(EXPERIMENT, bench.key, lhs["run_id"], root=root)
+    fig, (ax, ax_u) = plt.subplots(
+        2, 1, figsize=(6.0, 5.4), sharex=True,
+        gridspec_kw={"height_ratios": [2.0, 1.0]},
+    )
+    info = draw_fan(ax, ax_u, lhs, bench, ts)
+    if info is None:
+        plt.close(fig)
+        return []
+
+    ax.set_title(f"{bench.label}: {len(lhs)} mismatched plants", fontsize=10)
+    ax.legend(loc="best", fontsize=8)
+    fig.colorbar(info["mappable"], ax=[ax, ax_u], label=info["cbar_label"],
+                 fraction=0.04, pad=0.02)
+
+    ps.caption(fig, _fan_caption_text(info))
     return ps.save(fig, f"exp3_fan_{bench.key}", outdir)
 
 
@@ -293,8 +310,8 @@ def _parameter_axes(ax, bench) -> None:
     ax.grid(False)
 
 
-def _envelope_map(frame, bench, outdir, metric: str) -> List[Path]:
-    """Filled map of one metric over the two mismatch parameters.
+def draw_envelope(ax, frame, bench, metric: str, **cbar_kw) -> dict | None:
+    """Draw one mismatch-parameter map, with its scale, onto a supplied axis.
 
     The Latin-hypercube design is scattered, not gridded, so the field comes
     from a Delaunay triangulation of the sample.
@@ -306,7 +323,7 @@ def _envelope_map(frame, bench, outdir, metric: str) -> List[Path]:
     """
     grid = _envelope_frame(frame)
     if grid.empty:
-        return []
+        return None
     p0, p1 = MISMATCH_PARAMS[bench.key]
     xs = grid[p0].to_numpy(float)
     ys = grid[p1].to_numpy(float)
@@ -325,9 +342,9 @@ def _envelope_map(frame, bench, outdir, metric: str) -> List[Path]:
 
     ok = _usable(grid, values)
     if int(ok.sum()) < 4:
-        return []
+        return None
 
-    fig, ax = plt.subplots(figsize=(5.4, 4.2))
+    fig = ax.get_figure()
     x, y, z = xs[ok], ys[ok], values[ok]
     try:
         if metric == "iae":
@@ -335,7 +352,7 @@ def _envelope_map(frame, bench, outdir, metric: str) -> List[Path]:
                                  float(np.nanpercentile(z, 98)), 12)
             cf = ax.tricontourf(x, y, z, levels=levels, cmap=ps.SEQUENTIAL,
                                 extend="max")
-            fig.colorbar(cf, ax=ax, label=label)
+            fig.colorbar(cf, ax=ax, label=label, **cbar_kw)
             # The acceptability contour: twice the nominal cost.
             if float(np.min(z)) <= 2.0 <= float(np.max(z)):
                 cs = ax.tricontour(x, y, z, levels=[2.0], colors="white",
@@ -348,42 +365,66 @@ def _envelope_map(frame, bench, outdir, metric: str) -> List[Path]:
             levels = np.linspace(-lim, lim, 13) if lim > 0 else None
             cf = ax.tricontourf(x, y, z, levels=levels, cmap=ps.DIVERGING,
                                 extend="both")
-            fig.colorbar(cf, ax=ax, label=label)
+            fig.colorbar(cf, ax=ax, label=label, **cbar_kw)
             if float(np.min(z)) <= 0.0 <= float(np.max(z)):
                 ax.tricontour(x, y, z, levels=[0.0], colors="0.3",
                               linewidths=1.2)
     except Exception:  # noqa: BLE001 - a near-degenerate design has no triangulation
-        plt.close(fig)
-        return []
+        return None
 
     ax.scatter(xs, ys, s=8, facecolor="none", edgecolor="black", linewidth=0.4,
                zorder=5, label="sampled plant")
     ps.annotate_failures(ax, xs, ys, ~ok, label="no result")
     _parameter_axes(ax, bench)
-    ax.set_title(title, fontsize=10)
-    ax.legend(loc="best", fontsize=7.5)
 
-    n_fail = int((~ok).sum())
-    n_unsettled = int((~grid["completed"].to_numpy(bool) & ok).sum())
+    return {
+        "cbar_label": label,
+        "title": title,
+        "metric": metric,
+        "params": (p0, p1),
+        "ranges": (xs.min(), xs.max(), ys.min(), ys.max()),
+        "n_used": int(ok.sum()),
+        "n_total": len(grid),
+        "n_failed": int((~ok).sum()),
+        "n_unsettled": int((~grid["completed"].to_numpy(bool) & ok).sum()),
+    }
+
+
+def _envelope_caption_text(info) -> str:
+    """One envelope map's caption, shared by the standalone and combined figures."""
+    p0, p1 = info["params"]
+    x_lo, x_hi, y_lo, y_hi = info["ranges"]
     extra = (
         "The map bounds how far the plant may drift before it needs retraining."
-        if metric == "iae" else
+        if info["metric"] == "iae" else
         "Red settles above the setpoint, blue under it; the drawn contour is "
         "zero. The scale is clipped at the 98th percentile of |offset|."
     )
     notes = []
-    if n_fail:
-        notes.append(f"{n_fail} crossed run(s) gave no usable result and are "
-                     f"excluded")
-    if n_unsettled:
-        notes.append(f"{n_unsettled} solved without settling and are kept")
+    if info["n_failed"]:
+        notes.append(f"{info['n_failed']} crossed run(s) gave no usable result "
+                     f"and are excluded")
+    if info["n_unsettled"]:
+        notes.append(f"{info['n_unsettled']} solved without settling and are kept")
     excluded = f" {'; '.join(notes)}." if notes else ""
-    ps.caption(
-        fig,
-        f"Interpolated from {int(ok.sum())} of {len(grid)} sampled plants, "
-        f"{p0} over {xs.min():.2f}–{xs.max():.2f} and {p1} over "
-        f"{ys.min():.2f}–{ys.max():.2f}; dots are the sample.{excluded} {extra}",
+    return (
+        f"Interpolated from {info['n_used']} of {info['n_total']} sampled "
+        f"plants, {p0} over {x_lo:.2f}–{x_hi:.2f} and {p1} over "
+        f"{y_lo:.2f}–{y_hi:.2f}; dots are the sample.{excluded} {extra}"
     )
+
+
+def _envelope_map(frame, bench, outdir, metric: str) -> List[Path]:
+    """Filled map of one metric over the two mismatch parameters."""
+    fig, ax = plt.subplots(figsize=(5.4, 4.2))
+    info = draw_envelope(ax, frame, bench, metric)
+    if info is None:
+        plt.close(fig)
+        return []
+
+    ax.set_title(info["title"], fontsize=10)
+    ax.legend(loc="best", fontsize=7.5)
+    ps.caption(fig, _envelope_caption_text(info))
     fig.tight_layout()
     return ps.save(fig, f"exp3_envelope_{metric}_{bench.key}", outdir)
 

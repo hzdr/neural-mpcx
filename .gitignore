@@ -152,7 +152,11 @@ env/
 *_venv/
 .*env
 .vscode
-*env*
+*-env/
+*-env-*/
+*_env/
+.machine_id
+resultado_*.log
 
 # Spyder project settings
 .spyderproject

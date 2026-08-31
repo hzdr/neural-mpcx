@@ -5,6 +5,32 @@ All notable changes to NeuralMPCX will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.1.2] - 2026-08-31
+
+### Added
+
+- **`T1_measurement_noise`**, the noise sweep as its own table.
+- **`T4_rtf_wcet_grid`**, the worst-case real-time factor as a hidden-size by
+  horizon grid, both benchmarks side by side and the physics NMPC last. The
+  15-column per-run table stays as `T4_real_time_feasibility`. 
+- **`combined_fan_{cstr,cts}` and `combined_envelope`**, lettered 2x2 figures
+  built in `bench/figures/combined.py`. 
+
+### Changed
+
+- **`exp1_fan` reads its noise level off a colorbar** instead of a six-entry
+  legend, matching the `exp2` and `exp3` fans, and gains the median over all six
+  levels as a black line. 
+- **`T0` drops its `RTF_max` column.** 
+
+### Fixed
+
+- **`T5_normalizers.tex` did not compile.** 
+- **Two table captions carried a raw `IAE_norm`.** 
+- **`T0`'s caption and the README claimed a ±5 % success band.**
+- **`RUNINFO.json` lost the provenance of every earlier sweep.** 
+- **`.gitignore` was ignoring ten figures.**
+
 ## [3.1.1] - 2026-08-27
 
 ### Fixed

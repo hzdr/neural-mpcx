@@ -96,6 +96,13 @@ def build_parser() -> argparse.ArgumentParser:
              "into the reported worst case.",
     )
     parser.add_argument(
+        "--host-label", default=None,
+        help="a name for this machine, recorded in RUNINFO.json. Optional, and "
+             "nothing is collected without it: the sweep is identified by an "
+             "opaque local id, the CPU model and the OS. Pass something you are "
+             "willing to publish, since the store is committed.",
+    )
+    parser.add_argument(
         "--batch-size", type=int, default=None,
         help="run groups dispatched per batch; a crash-safe shard is written "
              "after each. Default: max(32, 4 x n_jobs), which keeps every "
@@ -232,6 +239,7 @@ def main(argv=None) -> int:
 
     bench_store.write_runinfo(
         {
+            **({"host_label": args.host_label} if args.host_label else {}),
             "experiments": [e.id for e in experiments],
             "n_jobs": args.n_jobs,
             "timing_jobs": args.timing_jobs,

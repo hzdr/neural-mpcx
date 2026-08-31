@@ -1,3 +1,2 @@
 experiment,benchmark,case,runs,runs_affected,failed_steps,%_of_steps,severity p50,severity p90,severity worst,persistent (>50% of steps),first failure [step],median steps
-exp3,CSTR,neural_vs_nmpc,18,3,138,12.777777777777779,0.7666666666666667,0.78,0.7833333333333333,3,4.0,60.0
 exp3,CSTR,disturbance_Tin,4,1,71,11.833333333333334,0.47333333333333333,0.47333333333333333,0.47333333333333333,0,79.0,150.0

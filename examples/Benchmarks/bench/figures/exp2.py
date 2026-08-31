@@ -75,23 +75,14 @@ def _box_percent(x0: np.ndarray, nominal: np.ndarray) -> float:
     return step * round(100.0 * raw / step)
 
 
-def _fan(frame, bench, outdir, root) -> List[Path]:
-    lhs = frame[frame["case"] == "lhs50"]
-    if lhs.empty or not _store.has_timeseries(EXPERIMENT, bench.key, root=root):
-        return []
-
-    ts = _store.load_timeseries(EXPERIMENT, bench.key, lhs["run_id"], root=root)
+def draw_fan(ax, ax_u, lhs, bench, ts) -> dict | None:
+    """Draw the initial-condition fan onto a supplied state and input axis."""
     tracked = bench.state_keys[bench.track_index]
     x0 = _x0_array(lhs)
     nominal = np.asarray(bench.x_nominal, dtype=float)
     dist = np.linalg.norm(x0 - nominal[None, :], axis=1)
     norm = Normalize(vmin=dist.min(), vmax=dist.max())
     cmap = ps.trace_cmap()
-
-    fig, (ax, ax_u) = plt.subplots(
-        2, 1, figsize=(6.0, 5.4), sharex=True,
-        gridspec_kw={"height_ratios": [2.0, 1.0]},
-    )
 
     curves = []
     for run_id, d in zip(lhs["run_id"], dist):
@@ -104,45 +95,72 @@ def _fan(frame, bench, outdir, root) -> List[Path]:
                   linewidth=0.5, alpha=0.45, zorder=2)
         curves.append(run[tracked].to_numpy())
 
-    if curves:
-        n = min(len(c) for c in curves)
-        stack = np.vstack([c[:n] for c in curves])
-        first = ts[ts.run_id == lhs["run_id"].iloc[0]].sort_values("step")
-        t = first["time_s"].to_numpy()[:n]
-        lo, med, hi = np.nanpercentile(stack, [5, 50, 95], axis=0)
-        ax.fill_between(t, lo, hi, color=ps.COLOR_PRED, alpha=0.22, linewidth=0,
-                        zorder=3, label="5–95 %")
-        ax.plot(t, med, color=ps.COLOR_PLANT, linewidth=1.8, zorder=4,
-                label="median")
-        ax.plot(t, first["sp"].to_numpy()[:n], color=ps.COLOR_SP,
-                linestyle="--", linewidth=1.2, zorder=5, label="setpoint")
+    if not curves:
+        return None
 
-    pct = _box_percent(x0, nominal)
+    n = min(len(c) for c in curves)
+    stack = np.vstack([c[:n] for c in curves])
+    first = ts[ts.run_id == lhs["run_id"].iloc[0]].sort_values("step")
+    t = first["time_s"].to_numpy()[:n]
+    lo, med, hi = np.nanpercentile(stack, [5, 50, 95], axis=0)
+    ax.fill_between(t, lo, hi, color=ps.COLOR_PRED, alpha=0.22, linewidth=0,
+                    zorder=3, label="5–95 %")
+    ax.plot(t, med, color=ps.COLOR_PLANT, linewidth=1.8, zorder=4,
+            label="median")
+    ax.plot(t, first["sp"].to_numpy()[:n], color=ps.COLOR_SP,
+            linestyle="--", linewidth=1.2, zorder=5, label="setpoint")
+
     ax.set_ylabel(f"{bench.state_labels[bench.track_index]} "
                   f"[{bench.state_units[bench.track_index]}]")
     ps.shade_inadmissible(ax, bench.x_lower[bench.track_index],
                           bench.x_upper[bench.track_index])
-    ax.set_title(f"{bench.label}: {len(lhs)} initial conditions, "
-                 f"±{pct:.0f} % around nominal", fontsize=10)
-    ps.finish(ax)
-
     ax_u.set_ylabel(f"{bench.action_labels[0]} [{bench.action_units[0]}]")
     ax_u.set_xlabel("time [s]")
+    ps.finish(ax, legend=False)
     ps.finish(ax_u, legend=False)
 
-    sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
-    fig.colorbar(sm, ax=[ax, ax_u], label=r"$\|x_0 - x_{\mathrm{nom}}\|$",
+    return {
+        "mappable": plt.cm.ScalarMappable(norm=norm, cmap=cmap),
+        "cbar_label": r"$\|x_0 - x_{\mathrm{nom}}\|$",
+        "box_percent": _box_percent(x0, nominal),
+        "n_total": len(lhs),
+        "n_completed": int(lhs["completed"].sum()),
+    }
+
+
+def _caption_text(info) -> str:
+    """The initial-condition fan's caption, shared by both figures."""
+    return (
+        f"Latin-hypercube starts inside a ±{info['box_percent']:.0f} % box "
+        f"around the nominal state, each run to completion. This sample is the "
+        f"study's empirical substitute for a recursive-feasibility guarantee. "
+        f"Shading marks the inadmissible side of each state constraint. "
+        f"N_total = {info['n_total']}, N_completed = {info['n_completed']}."
+    )
+
+
+def _fan(frame, bench, outdir, root) -> List[Path]:
+    lhs = frame[frame["case"] == "lhs50"]
+    if lhs.empty or not _store.has_timeseries(EXPERIMENT, bench.key, root=root):
+        return []
+
+    ts = _store.load_timeseries(EXPERIMENT, bench.key, lhs["run_id"], root=root)
+    fig, (ax, ax_u) = plt.subplots(
+        2, 1, figsize=(6.0, 5.4), sharex=True,
+        gridspec_kw={"height_ratios": [2.0, 1.0]},
+    )
+    info = draw_fan(ax, ax_u, lhs, bench, ts)
+    if info is None:
+        plt.close(fig)
+        return []
+
+    ax.set_title(f"{bench.label}: {len(lhs)} initial conditions, "
+                 f"±{info['box_percent']:.0f} % around nominal", fontsize=10)
+    ax.legend(loc="best", fontsize=8)
+    fig.colorbar(info["mappable"], ax=[ax, ax_u], label=info["cbar_label"],
                  fraction=0.04, pad=0.02)
 
-    n_done = int(lhs["completed"].sum())
-    ps.caption(
-        fig,
-        f"Latin-hypercube starts inside a ±{pct:.0f} % box around the nominal "
-        f"state, each run to completion. This sample is the study's empirical "
-        f"substitute for a recursive-feasibility guarantee. Shading marks the "
-        f"inadmissible side of each state constraint. "
-        f"N_total = {len(lhs)}, N_completed = {n_done}.",
-    )
+    ps.caption(fig, _caption_text(info))
     return ps.save(fig, f"exp2_fan_{bench.key}", outdir)
 
 

@@ -22,7 +22,8 @@ Layout
 ::
 
     results/
-      RUNINFO.json                       provenance: versions, host, seeds, timing
+      RUNINFO.json                       provenance: one appended record per sweep
+      .machine_id                        opaque local id, git-ignored
       manifest.parquet                   one row per run: the full specification
       metrics.parquet                    one row per run: every scalar metric
       normalizers.json                   nominal IAE per benchmark (the denominators)
@@ -46,10 +47,12 @@ repository.
 from __future__ import annotations
 
 import json
+import os
 import platform
 import shutil
 import subprocess
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Set
@@ -418,10 +421,80 @@ def _git_sha() -> str:
         return "unknown"
 
 
+#: Filename of the cached machine id, beside the store it identifies.
+MACHINE_ID_FILE = ".machine_id"
+
+
+def _machine_id(root: Path | None = None) -> str:
+    """A stable opaque id for the machine writing this store.
+    """
+    p = results_dir(root) / MACHINE_ID_FILE
+    try:
+        cached = p.read_text().strip()
+        if cached:
+            return cached
+    except OSError:
+        pass
+    value = uuid.uuid4().hex[:12]
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(value + "\n")
+    except OSError:  # a read-only store still reports, it just does not persist
+        pass
+    return value
+
+
+def _cpu_model() -> str:
+    """The processor's product name.
+    """
+    system = platform.system()
+    try:
+        if system == "Linux":
+            for line in Path("/proc/cpuinfo").read_text().splitlines():
+                if line.startswith("model name"):
+                    return line.split(":", 1)[1].strip()
+        elif system == "Darwin":
+            out = subprocess.run(
+                ["sysctl", "-n", "machdep.cpu.brand_string"],
+                capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+            if out:
+                return out
+        elif system == "Windows":
+            if platform.processor().strip():
+                return platform.processor().strip()
+    except Exception:  # noqa: BLE001 - provenance must never fail a sweep
+        pass
+    return platform.machine() or "unknown"
+
+
+def _migrate(sweep: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    """
+    if "host" not in sweep and "platform" not in sweep:
+        return sweep
+    out = {k: v for k, v in sweep.items() if k not in ("host", "platform")}
+    raw = str(sweep.get("platform", ""))
+    system = raw.split("-", 1)[0] if raw else ""
+    arch = next((a for a in ("x86_64", "AMD64", "arm64", "aarch64") if a in raw), "")
+    out.setdefault("os", " ".join(p for p in (system, arch) if p) or "unknown")
+    out.setdefault("machine_id", "legacy")
+    return out
+
+
+def _legacy_sweeps(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Read any RUNINFO layout as a list of sweeps.
+    """
+    if not raw:
+        return []
+    return [_migrate(s) for s in (raw["sweeps"] if "sweeps" in raw else [raw])]
+
+
 def write_runinfo(
     extra: Dict[str, Any] | None = None, root: Path | None = None
 ) -> Dict[str, Any]:
-    """Record provenance, so a result can be traced back to how it was made."""
+    """Record provenance, so a result can be traced back to how it was made.
+    """
     from . import seeds as _seeds
 
     versions: Dict[str, str] = {"python": sys.version.split()[0]}
@@ -435,20 +508,35 @@ def write_runinfo(
     info: Dict[str, Any] = {
         "generated_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "git_sha": _git_sha(),
-        "host": platform.node(),
-        "platform": platform.platform(),
+        "machine_id": _machine_id(root),
+        "os": f"{platform.system()} {platform.machine()}".strip(),
+        "cpu": _cpu_model(),
+        "cpu_count": os.cpu_count(),
         "versions": versions,
         "seeding": _seeds.describe(),
     }
     info.update(extra or {})
     p = ensure_dirs(root)
-    p["runinfo"].write_text(json.dumps(info, indent=2))
+    sweeps = _legacy_sweeps(
+        json.loads(p["runinfo"].read_text()) if p["runinfo"].exists() else {}
+    )
+    sweeps.append(info)
+    p["runinfo"].write_text(json.dumps({"sweeps": sweeps}, indent=2))
     return info
 
 
-def load_runinfo(root: Path | None = None) -> Dict[str, Any]:
+def load_sweeps(root: Path | None = None) -> List[Dict[str, Any]]:
+    """Every invocation that contributed to the store, oldest first."""
     p = _paths(results_dir(root))
-    return json.loads(p["runinfo"].read_text()) if p["runinfo"].exists() else {}
+    return _legacy_sweeps(
+        json.loads(p["runinfo"].read_text()) if p["runinfo"].exists() else {}
+    )
+
+
+def load_runinfo(root: Path | None = None) -> Dict[str, Any]:
+    """The most recent sweep. Use :func:`load_sweeps` to see the whole history."""
+    sweeps = load_sweeps(root)
+    return sweeps[-1] if sweeps else {}
 
 
 __all__ = [
@@ -457,5 +545,5 @@ __all__ = [
     "load_metrics", "load_timeseries", "has_timeseries",
     "compute_normalizers", "load_normalizers", "attach_normalized_iae",
     "attach_normalized_tv",
-    "write_runinfo", "load_runinfo",
+    "write_runinfo", "load_runinfo", "load_sweeps",
 ]

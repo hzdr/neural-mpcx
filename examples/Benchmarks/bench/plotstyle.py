@@ -216,6 +216,18 @@ def log_axis_plain(ax, which: str = "x") -> None:
     axis.set_minor_formatter(mpl.ticker.NullFormatter())
 
 
+def panel_label(ax, letter: str) -> None:
+    """Letter one panel of a combined figure, inside its top-left corner.
+
+    The box sits over the data, so it carries an opaque background: a fan puts
+    a hundred traces under this corner.
+    """
+    ax.text(0.015, 0.975, f"({letter})", transform=ax.transAxes, fontsize=10,
+            fontweight="bold", va="top", ha="left", zorder=10,
+            bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.75,
+                  "pad": 1.6})
+
+
 def save(fig, name: str, outdir: Path, close: bool = True) -> List[Path]:
     """Write a figure as both PDF and SVG, the notebooks' convention."""
     outdir = Path(outdir)
@@ -264,25 +276,28 @@ CAPTION_FONTSIZE = 7
 _CAPTION_CHAR_IN = 0.48 * CAPTION_FONTSIZE / 72.0
 
 
-def caption(fig, text: str) -> None:
+def caption(fig, text: str, y: float = -0.02) -> None:
     """Attach a small footnote carrying absolute values and N counts.
 
     The text is wrapped to the figure's width. Left unwrapped it sets as one
     long line, and ``savefig.bbox = "tight"`` then widens the saved bounding box
     to fit it, so a figure with a long caption is saved several times wider than
     its axes and shrinks when a document scales it to a column.
+
+    Lower ``y`` clears an artist already sitting under the axes, such as a
+    figure-level legend.
     """
     width_in = fig.get_size_inches()[0]
     columns = max(40, int(width_in / _CAPTION_CHAR_IN))
     wrapped = textwrap.fill(text, width=columns)
-    fig.text(0.005, -0.02, wrapped, fontsize=CAPTION_FONTSIZE, va="top",
+    fig.text(0.005, y, wrapped, fontsize=CAPTION_FONTSIZE, va="top",
              ha="left", color="0.25")
 
 
 __all__ = [
     "apply", "RCPARAMS", "CATEGORICAL", "MARKERS", "LINESTYLES", "MARKER_KW",
     "ordinal", "trace_cmap", "series_style", "finish", "log2_axis",
-    "log_axis_plain", "save",
+    "log_axis_plain", "panel_label", "save",
     "shade_inadmissible", "annotate_failures", "caption", "CAPTION_FONTSIZE",
     "SEQUENTIAL", "DIVERGING", "ORDINAL_CMAP", "ORDINAL_TRACE_RANGE",
     "COLOR_PLANT", "COLOR_PRED", "COLOR_SP",

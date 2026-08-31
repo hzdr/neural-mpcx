@@ -51,7 +51,7 @@ if str(HERE) not in sys.path:
 from bench import config as bench_config  # noqa: E402
 from bench import plotstyle  # noqa: E402
 from bench import store as bench_store  # noqa: E402
-from bench.figures import exp1, exp2, exp3, exp4, exp5  # noqa: E402
+from bench.figures import combined, exp1, exp2, exp3, exp4, exp5  # noqa: E402
 from bench.tables import builders as table_builders  # noqa: E402
 
 
@@ -61,6 +61,7 @@ FIGURE_BUILDERS = {
     "exp3": exp3.build,
     "exp4": exp4.build,
     "exp5": exp5.build,
+    "combined": combined.build,
 }
 
 
@@ -94,13 +95,32 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _check(metrics, root) -> int:
     """Summarize store coverage, so a partial sweep is visible."""
-    info = bench_store.load_runinfo(root)
     print(f"store            : {bench_store.results_dir(root)}")
     print(f"runs             : {len(metrics)}")
-    if info:
-        print(f"generated        : {info.get('generated_utc', '?')}")
-        print(f"git sha          : {info.get('git_sha', '?')[:12]}")
-        print(f"wall clock       : {info.get('wall_seconds', '?')} s")
+    sweeps = bench_store.load_sweeps(root)
+    if sweeps:
+        # One line per sweep, not just the last: a store assembled on more than
+        # one machine cannot be read as one set of solve times.
+        print()
+        print(f"{'sweep':<21} {'git sha':<14} {'machine':<14} {'casadi':<8} "
+              f"{'runs':>5}  experiments")
+        print("-" * 80)
+        for s in sweeps:
+            machine = s.get("host_label") or s.get("machine_id", "?")
+            print(f"{s.get('generated_utc', '?')[:19]:<21} "
+                  f"{s.get('git_sha', '?')[:12]:<14} "
+                  f"{machine[:13]:<14} "
+                  f"{s.get('versions', {}).get('casadi', '?'):<8} "
+                  f"{s.get('executed_runs', '?'):>5}  "
+                  f"{', '.join(s.get('experiments', []))}")
+        machines = {s.get("machine_id") for s in sweeps}
+        if len(machines) > 1:
+            print(f"\n  Built on {len(machines)} machines. Solve times do not "
+                  f"compare across them.")
+            for s in sweeps:
+                print(f"    {s.get('machine_id', '?'):<14} "
+                      f"{s.get('cpu', '?')} "
+                      f"({s.get('cpu_count', '?')} cores, {s.get('os', '?')})")
     print()
     print(f"{'experiment':<10} {'benchmark':<22} {'runs':>6} {'completed':>10} "
           f"{'failed solves':>14} {'time series':>12}")

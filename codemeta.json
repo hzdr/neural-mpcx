@@ -3,7 +3,7 @@
   "@type": "SoftwareSourceCode",
   "name": "NeuralMPCX",
   "description": "Model Predictive Control toolkit with neural MPC support (CasADi-friendly).",
-  "version": "3.1.1",
+  "version": "3.1.2",
   "license": "https://spdx.org/licenses/Apache-2.0",
   "identifier": "https://doi.org/10.14278/rodare.4987",
   "codeRepository": "https://github.com/hzdr/neural-mpcx",

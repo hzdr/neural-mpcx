@@ -15,7 +15,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Figure builders, one module per experiment.
+"""Figure builders: one module per experiment, plus ``combined`` for the
+figures that span several of them.
 
 Every builder has the same shape::
 

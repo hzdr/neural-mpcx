@@ -38,16 +38,26 @@ from .. import store as _store
 
 
 def _write(frame: pd.DataFrame, name: str, outdir: Path,
-           caption: str = "") -> List[Path]:
-    """Persist one table as CSV plus a LaTeX fragment."""
+           caption: str = "", escape: bool = True,
+           column_format: str | None = None) -> List[Path]:
+    """Persist one table as CSV plus a LaTeX fragment.
+
+    ``escape`` off is for a table whose cells already carry LaTeX; every other
+    table needs it on, to survive the underscores in case names.
+
+    ``column_format`` overrides the alignment pandas infers from the dtypes. A
+    grid whose columns mix numbers with a gap marker otherwise sets those
+    columns flush left and the all-numeric ones flush right.
+    """
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     csv_path = outdir / f"{name}.csv"
     tex_path = outdir / f"{name}.tex"
     frame.to_csv(csv_path, index=False)
     tex = frame.to_latex(
-        index=False, escape=True, float_format=lambda v: f"{v:.4g}",
+        index=False, escape=escape, float_format=lambda v: f"{v:.4g}",
         caption=caption or name, label=f"tab:{name}",
+        column_format=column_format,
     )
     tex_path.write_text(tex)
     return [csv_path, tex_path]
@@ -101,14 +111,24 @@ VARIED = {
     "exp5": "nothing (nominal reference)",
 }
 
+#: Cases held out of the headline aggregates. ``neural_vs_nmpc`` runs both
+#: controllers over one mismatch grid, so folding it into exp3 counts that grid
+#: twice and charges the physics solver's failures to the neural controller. It
+#: keeps its own row in T3 and its own figure.
+AGGREGATE_EXCLUDED = ("neural_vs_nmpc",)
+
 
 def robustness_at_a_glance(metrics: pd.DataFrame, outdir: Path) -> List[Path]:
     """Every experiment and benchmark, one row each: the summary table.
 
     Columns: what varied, N_total / N_completed, success rate, median IAE with
-    its interquartile range, worst constraint violation, failed solves, and the
-    worst real-time factor observed.
+    its interquartile range, worst constraint violation and failed solves.
+
+    Solve times stay out. The timing experiment ran on a different machine from
+    the rest of the store, so one RTF column here would compare two hosts.
+    :func:`exp4_rtf_grid` reports them where they are comparable.
     """
+    metrics = metrics[~metrics["case"].isin(AGGREGATE_EXCLUDED)]
     rows = []
     for (exp, bench_key), group in metrics.groupby(["experiment", "benchmark"]):
         summary = _summary_row(group)
@@ -127,15 +147,16 @@ def robustness_at_a_glance(metrics: pd.DataFrame, outdir: Path) -> List[Path]:
     display = frame[[
         "experiment", "benchmark", "what varied", "N_total", "N_completed",
         "success_rate", "IAE_norm [IQR]", "worst_violation", "failed_solves",
-        "RTF_max",
     ]]
     return _write(
         display, "T0_robustness_at_a_glance", outdir,
         caption=(
             "Robustness at a glance. Success = no failed solve and the tracked "
-            "variable inside the +-5 % setpoint band at the end of the run. "
+            "variable inside the +-50 % setpoint band at the end of the run. "
             "Violations are expressed as a fraction of each variable's operating "
-            "range. All aggregates include failed runs."
+            "range. All aggregates include failed runs. The paired "
+            "neural-versus-physics cases are excluded here and reported on their "
+            "own; see T3."
         ),
     )
 
@@ -143,6 +164,60 @@ def robustness_at_a_glance(metrics: pd.DataFrame, outdir: Path) -> List[Path]:
 # --------------------------------------------------------------------------
 # Per-experiment tables
 # --------------------------------------------------------------------------
+
+def exp1_noise(metrics: pd.DataFrame, outdir: Path) -> List[Path]:
+    """Measurement-noise robustness, one row per benchmark and noise level.
+
+    Actuator travel is reported against the noise-free run of the same
+    benchmark. The two absolute anchors differ by a factor of four and carry
+    different units, so a ratio is the only column both benchmarks can share;
+    the caption holds the anchors.
+    """
+    data = metrics[metrics["experiment"] == "exp1"]
+    if data.empty:
+        return []
+
+    rows, anchors = [], {}
+    for bench_key, frame in data.groupby("benchmark"):
+        quiet = frame[frame["noise_sigma_pct"] == 0.0]["tv_norm"]
+        anchor = float(quiet.median()) if len(quiet) else np.nan
+        anchors[bench_key] = anchor
+        for sigma, group in frame.groupby("noise_sigma_pct"):
+            stats = _metrics.median_iqr(group["iae_norm"].to_numpy())
+            finite = group["iae_norm"].to_numpy(float)
+            finite = finite[np.isfinite(finite)]
+            rows.append({
+                "benchmark": _config.BENCHMARKS[bench_key].label,
+                "sigma [%]": float(sigma),
+                "N": len(group),
+                "reached band": int(group["reached_band"].sum()),
+                "IAE_norm [IQR]": (f"{stats['median']:.3g} [{stats['q1']:.3g}, "
+                                   f"{stats['q3']:.3g}]"),
+                "IAE_norm worst": float(finite.max()) if finite.size else np.nan,
+                "TV(u) rel.": float(group["tv_norm"].median()) / anchor,
+                "violation rate": float(np.nanmean(group["violation_rate"])),
+                "worst violation": float(np.nanmax(group["worst_violation"])),
+                "failed solves": int(np.nansum(
+                    group["n_failed_solves"].clip(lower=0))),
+            })
+
+    anchor_text = ", ".join(
+        f"{_config.BENCHMARKS[k].label} {v:.3g}" for k, v in anchors.items()
+    )
+    return _write(
+        pd.DataFrame(rows).sort_values(["benchmark", "sigma [%]"]),
+        "T1_measurement_noise", outdir,
+        caption=(
+            f"Measurement-noise robustness. Sigma is a percentage of each "
+            f"measured variable's operating range, so one axis serves both "
+            f"benchmarks; every level holds 20 seeded replicates under common "
+            f"random numbers. TV(u) is each actuator's travel in fractions of "
+            f"its own span, summed over the run, divided by the noise-free run "
+            f"of the same benchmark; the anchors are {anchor_text}. Violations "
+            f"are a fraction of the operating range. Every run is counted."
+        ),
+    )
+
 
 def exp2_summary(metrics: pd.DataFrame, outdir: Path) -> List[Path]:
     """Initial-condition robustness, one row per benchmark."""
@@ -316,9 +391,77 @@ def exp3_tolerance(metrics: pd.DataFrame, outdir: Path,
             f"Largest still-acceptable drift per parameter, along the slice with "
             f"the other parameter at nominal, linearly interpolated from the "
             f"Latin-hypercube mismatch sample. Acceptable means "
-            f"IAE_norm <= {threshold:g}. Runs that solved without settling carry "
-            f"their IAE into the interpolation, and the band stops at the edge "
-            f"of the sampled region without extrapolating past it."
+            f"IAE$_{{\\mathrm{{norm}}}} \\le {threshold:g}$. Runs that solved "
+            f"without settling carry their IAE into the interpolation, and the "
+            f"band stops at the edge of the sampled region without "
+            f"extrapolating past it."
+        ),
+    )
+
+
+#: Filled into a grid cell the sweep does not cover.
+_GAP = "--"
+
+
+def exp4_rtf_grid(metrics: pd.DataFrame, outdir: Path) -> List[Path]:
+    """Worst-case real-time factor as a hidden-size by horizon grid.
+
+    One row per hidden size, both benchmarks side by side, the physics NMPC
+    last. The two-tank sweep starts at 32 units and the NMPC has no hidden
+    state, so those cells read ``--``.
+    """
+    data = metrics[metrics["experiment"] == "exp4"]
+    if data.empty:
+        return []
+
+    horizons = sorted(int(h) for h in data["horizon"].unique())
+    bench_keys = [k for k in ("cstr", "cts") if k in set(data["benchmark"])]
+    neural = data[data["controller"] != "nmpc"]
+    sizes = sorted(int(h) for h in neural["hidden_size"].unique())
+
+    def cell(frame, bench_key, horizon):
+        match = frame[(frame["benchmark"] == bench_key)
+                      & (frame["horizon"] == horizon)]
+        # Fixed precision, not %g: the grid is read down a column, and varying
+        # decimals put the digits of one column at four different offsets.
+        return f"{match['rtf_wcet'].max():.4f}" if len(match) else _GAP
+
+    rows = []
+    for size in sizes:
+        row = {"hidden size": size}
+        for bench_key in bench_keys:
+            label = bench_key.upper()
+            for horizon in horizons:
+                row[f"{label} N={horizon}"] = cell(
+                    neural[neural["hidden_size"] == size], bench_key, horizon)
+        rows.append(row)
+
+    physics = data[data["controller"] == "nmpc"]
+    if not physics.empty:
+        row = {"hidden size": "physics NMPC"}
+        for bench_key in bench_keys:
+            label = bench_key.upper()
+            for horizon in horizons:
+                row[f"{label} N={horizon}"] = cell(physics, bench_key, horizon)
+        rows.append(row)
+
+    periods = ", ".join(
+        f"{_config.BENCHMARKS[k].label} {_config.BENCHMARKS[k].sample_time_s:g} s"
+        for k in bench_keys
+    )
+    frame = pd.DataFrame(rows)
+    return _write(
+        frame, "T4_rtf_wcet_grid", outdir,
+        column_format="l" + "r" * (frame.shape[1] - 1),
+        caption=(
+            f"Worst-case real-time factor: the slowest solve of a run over the "
+            f"control period ({periods}). Below 1 the controller fits inside "
+            f"its period. Measured serially on an otherwise idle machine, which "
+            f"is a different machine from the one that produced every other "
+            f"experiment in this study, so read these against each other and "
+            f"not against the solve times reported elsewhere. The two-tank grid "
+            f"starts at 32 units: the 8- and 16-unit checkpoints fail every "
+            f"solve from this scenario's empty-tank start."
         ),
     )
 
@@ -385,6 +528,7 @@ def solver_failures(metrics: pd.DataFrame, outdir: Path,
         with the severity, it separates a loop that degraded from one that
         never got going.
     """
+    metrics = metrics[~metrics["case"].isin(AGGREGATE_EXCLUDED)]
     rows = []
     for (exp, bench_key, case), group in metrics.groupby(
         ["experiment", "benchmark", "case"]
@@ -445,12 +589,15 @@ def normalizers_table(outdir: Path, root: Path | None = None) -> List[Path]:
     normalizers = _store.load_normalizers(root)
     if not normalizers:
         return []
+    # The stored unit is already LaTeX, so this table opts out of escaping and
+    # hands over cells that are LaTeX throughout. Escaped, the unit compiles to
+    # literal backslashes instead of a centred dot.
     rows = [
         {
             "benchmark": _config.BENCHMARKS[k].label,
-            "tracked variable": v["tracked_variable"],
+            "tracked variable": f"${v['tracked_variable']}$",
             "nominal IAE": v["iae_tracked"],
-            "unit": v["unit"],
+            "unit": v["unit"].replace("$*", r"\cdot$").replace("*", r"$\cdot$"),
             "runs": v["n_runs"],
         }
         for k, v in normalizers.items()
@@ -458,10 +605,11 @@ def normalizers_table(outdir: Path, root: Path | None = None) -> List[Path]:
     return _write(
         pd.DataFrame(rows), "T5_normalizers", outdir,
         caption=(
-            "The nominal closed-loop IAE of each benchmark. Every IAE_norm in "
-            "the study is divided by these, so 1.0 means as good as the nominal "
-            "reported figure."
+            "The nominal closed-loop IAE of each benchmark. Every normalized "
+            "IAE in the study is divided by these, so 1.0 means as good as the "
+            "nominal reported figure."
         ),
+        escape=False,
     )
 
 
@@ -470,10 +618,12 @@ def build_all(metrics: pd.DataFrame, outdir: Path,
     """Build every table the store supports."""
     written: List[Path] = []
     written += robustness_at_a_glance(metrics, outdir)
+    written += exp1_noise(metrics, outdir)
     written += exp2_summary(metrics, outdir)
     written += exp2_worst(metrics, outdir)
     written += exp3_cases(metrics, outdir)
     written += exp3_tolerance(metrics, outdir)
+    written += exp4_rtf_grid(metrics, outdir)
     written += exp4_realtime(metrics, outdir)
     written += solver_failures(metrics, outdir, root)
     written += normalizers_table(outdir, root)

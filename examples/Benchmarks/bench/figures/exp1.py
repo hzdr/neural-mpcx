@@ -35,6 +35,7 @@ from .. import plotstyle as ps
 from .. import store as _store
 
 import matplotlib.pyplot as plt
+from matplotlib.colors import BoundaryNorm, ListedColormap
 
 
 EXPERIMENT = "exp1"
@@ -47,21 +48,21 @@ EXPERIMENT = "exp1"
 TRACE_REPLICATES = (0, 4, 8, 12, 16)
 
 
-def _fan(frame, bench, ts, outdir) -> List[Path]:
-    """Trajectories banded by noise level, with the input below."""
+def draw_fan(ax, ax_u, frame, bench, ts) -> dict | None:
+    """Draw the noise fan onto a supplied state axis and input axis.
+
+    Returns the colorbar mappable and the counts the caption needs, or None
+    when the store held no trajectory for any run.
+    """
     sigmas = sorted(frame["noise_sigma_pct"].unique())
     tracked = bench.state_keys[bench.track_index]
     thin = bench.key == "cts"
-
-    fig, (ax, ax_u) = plt.subplots(
-        2, 1, figsize=(6.0, 5.4), sharex=True,
-        gridspec_kw={"height_ratios": [2.0, 1.0]},
-    )
+    colors = ps.ordinal(len(sigmas))
+    pooled = []
 
     for i, sigma in enumerate(sigmas):
         runs = frame[frame["noise_sigma_pct"] == sigma]
-        style = ps.series_style(i, len(sigmas), ordered=True)
-        color = style["color"]
+        color = colors[i]
 
         curves, inputs, times = [], [], []
         for run_id, replicate in zip(runs["run_id"], runs["replicate"]):
@@ -82,21 +83,25 @@ def _fan(frame, bench, ts, outdir) -> List[Path]:
 
         n = min(len(c) for c in curves)
         t = times[0][:n]
-        lo, med, hi = np.nanpercentile(
-            np.vstack([c[:n] for c in curves]), [5, 50, 95], axis=0
-        )
-        ax.fill_between(t, lo, hi, color=color, alpha=0.15, linewidth=0, zorder=3)
-        ax.plot(t, med, color=color, linestyle=style["linestyle"], linewidth=1.6,
-                zorder=4, label=f"{sigma:g}")
+        stack = np.vstack([c[:n] for c in curves])
+        pooled.append(stack)
+        lo, med, hi = np.nanpercentile(stack, [5, 50, 95], axis=0)
+        ax.fill_between(t, lo, hi, color=color, alpha=0.15, linewidth=0, zorder=3,
+                        label="5–95 %" if i == 0 else None)
+        # The colorbar carries the level now, so the medians share one style.
+        ax.plot(t, med, color=color, linewidth=1.4, zorder=4)
         u_med = np.nanmedian(np.vstack([u[:n] for u in inputs]), axis=0)
-        ax_u.plot(t, u_med, color=color, linestyle=style["linestyle"],
-                  linewidth=1.2, zorder=4)
+        ax_u.plot(t, u_med, color=color, linewidth=1.2, zorder=4)
 
-    if not ax.lines:
-        plt.close(fig)
-        return []
+    if not pooled:
+        return None
 
     first = ts[ts.run_id == frame["run_id"].iloc[0]].sort_values("step")
+    n = min(s.shape[1] for s in pooled)
+    t = first["time_s"].to_numpy()[:n]
+    ax.plot(t, np.nanmedian(np.vstack([s[:, :n] for s in pooled]), axis=0),
+            color=ps.COLOR_PLANT, linewidth=1.8, zorder=6,
+            label="median")
     ax.plot(first["time_s"], first["sp"], color=ps.COLOR_SP, linestyle="--",
             linewidth=1.2, zorder=5, label="setpoint")
 
@@ -104,29 +109,63 @@ def _fan(frame, bench, ts, outdir) -> List[Path]:
                   f"[{bench.state_units[bench.track_index]}]")
     ps.shade_inadmissible(ax, bench.x_lower[bench.track_index],
                           bench.x_upper[bench.track_index])
-    ax.set_title(f"{bench.label}: closed loop under measurement noise",
-                 fontsize=10)
-    ps.finish(ax, legend=False)
-    ax.legend(loc="best", ncol=2, fontsize=7.5,
-              title=r"$\sigma$ [% of range]", title_fontsize=7.5)
-
     ax_u.set_ylabel(f"{bench.action_labels[0]} [{bench.action_units[0]}]")
     ax_u.set_xlabel("time [s]")
+    ps.finish(ax, legend=False)
     ps.finish(ax_u, legend=False)
 
-    n_reps = frame["replicate"].nunique()
+    sm = plt.cm.ScalarMappable(
+        norm=BoundaryNorm(np.arange(len(sigmas) + 1), len(sigmas)),
+        cmap=ListedColormap(colors),
+    )
+    return {
+        "mappable": sm,
+        "cbar_label": r"$\sigma$ [% of range]",
+        "cbar_ticks": np.arange(len(sigmas)) + 0.5,
+        "cbar_ticklabels": [f"{s:g}" for s in sigmas],
+        "n_total": len(frame),
+        "n_completed": int(frame["completed"].sum()),
+        "n_reps": frame["replicate"].nunique(),
+        "thinned": thin,
+    }
+
+
+def _caption_text(info) -> str:
+    """The noise fan's caption, shared by the standalone and combined figures."""
     thinning = (
         f" Traces shown for replicates "
-        f"{', '.join(str(r) for r in TRACE_REPLICATES)}; bands use all {n_reps}."
-        if thin else ""
+        f"{', '.join(str(r) for r in TRACE_REPLICATES)}; bands use all "
+        f"{info['n_reps']}."
+        if info["thinned"] else ""
     )
-    ps.caption(
-        fig,
-        f"Median and 5–95 % band over {n_reps} seeded realizations per noise "
-        f"level, common random numbers throughout. Shading marks the "
+    return (
+        f"One band and one colored median per noise level, over {info['n_reps']} "
+        f"seeded realizations each, common random numbers throughout; the "
+        f"black line is the median over every level. Shading marks the "
         f"inadmissible side of the constraint.{thinning} "
-        f"N_total = {len(frame)}, N_completed = {int(frame['completed'].sum())}.",
+        f"N_total = {info['n_total']}, N_completed = {info['n_completed']}."
     )
+
+
+def _fan(frame, bench, ts, outdir) -> List[Path]:
+    """Trajectories banded by noise level, with the input below."""
+    fig, (ax, ax_u) = plt.subplots(
+        2, 1, figsize=(6.0, 5.4), sharex=True,
+        gridspec_kw={"height_ratios": [2.0, 1.0]},
+    )
+    info = draw_fan(ax, ax_u, frame, bench, ts)
+    if info is None:
+        plt.close(fig)
+        return []
+
+    ax.set_title(f"{bench.label}: closed loop under measurement noise",
+                 fontsize=10)
+    ax.legend(loc="best", fontsize=7.5)
+    bar = fig.colorbar(info["mappable"], ax=[ax, ax_u],
+                       label=info["cbar_label"], fraction=0.04, pad=0.02)
+    bar.set_ticks(info["cbar_ticks"], labels=info["cbar_ticklabels"])
+
+    ps.caption(fig, _caption_text(info))
     return ps.save(fig, f"exp1_fan_{bench.key}", outdir)
 
 
