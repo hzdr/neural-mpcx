@@ -1,9 +1,9 @@
-experiment,benchmark,what varied,N_total,N_completed,success_rate,IAE_norm [IQR],worst_violation,failed_solves
+experiment,benchmark,what varied,Runs (total),Runs (completed),completion_rate,IAE_norm [IQR],worst_violation,failed_solves
 exp1,CSTR,measurement noise sigma,120,118,0.9833333333333333,"1.45 [1, 1.92]",0.16552723220303536,0
 exp1,Cascaded two-tank,measurement noise sigma,120,116,0.9666666666666667,"1.1 [1, 1.56]",0.0,0
 exp2,CSTR,"initial condition (+-15 % CSTR, +-50 % two-tank)",50,50,1.0,"1 [0.916, 1.14]",0.0873643558306178,0
 exp2,Cascaded two-tank,"initial condition (+-15 % CSTR, +-50 % two-tank)",50,50,1.0,"1.05 [0.995, 1.06]",0.0,0
-exp3,CSTR,plant mismatch and step disturbances,199,198,0.9949748743718593,"2.16 [1.54, 2.85]",0.20189690195892313,71
+exp3,CSTR,plant mismatch and step disturbances,217,213,0.9815668202764977,"2.17 [1.53, 2.91]",0.20189690195892313,210
 exp3,Cascaded two-tank,plant mismatch and step disturbances,195,195,1.0,"1.48 [1.15, 1.92]",0.0,0
 exp4,CSTR,hidden size x horizon,24,24,1.0,"0.998 [0.943, 1.02]",0.008126060052061951,0
 exp4,Cascaded two-tank,hidden size x horizon,12,12,1.0,"1.23 [1.08, 1.37]",0.0,0

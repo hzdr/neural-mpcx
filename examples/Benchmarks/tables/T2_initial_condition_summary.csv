@@ -1,3 +1,3 @@
-benchmark,N_total,N_completed,success_rate,IAE_norm_median,IAE_norm_q1,IAE_norm_q3,IAE_norm_worst,worst_violation,violation_rate,failed_solves,RTF_max
+benchmark,Runs (total),Runs (completed),completion_rate,IAE_norm_median,IAE_norm_q1,IAE_norm_q3,IAE_norm_worst,worst_violation,violation_rate,failed_solves,RTF_max
 CSTR,50,50,1.0,1.0001949638426346,0.915813537182302,1.1413726025966962,1.3703654906393998,0.0873643558306178,0.04833333333333333,0,0.04988261666666302
 Cascaded two-tank,50,50,1.0,1.054860690630191,0.9953067111586589,1.064639942267175,1.0916616249634425,0.0,0.0,0,0.10357700000167824

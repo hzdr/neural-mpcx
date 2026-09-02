@@ -1,9 +1,9 @@
 \begin{table}
-\caption{Measurement-noise robustness. Sigma is a percentage of each measured variable's operating range, so one axis serves both benchmarks; every level holds 20 seeded replicates under common random numbers. TV(u) is each actuator's travel in fractions of its own span, summed over the run, divided by the noise-free run of the same benchmark; the anchors are CSTR 1.83, Cascaded two-tank 6.57. Violations are a fraction of the operating range. Every run is counted.}
+\caption{Measurement-noise robustness. Sigma is a percentage of each measured variable's operating range, so one axis serves both benchmarks; every level holds 20 seeded replicates under common random numbers. TV(u) is each actuator's travel in fractions of its own span, summed over the run, divided by the noise-free run of the same benchmark. That sum is dimensionless so it is  comparable to no single channel; on its own the anchors, medians over the 20 noise-free replicates, are CSTR 1.83, Cascaded two-tank 6.57. Viol. rate is the mean over runs of the per-run fraction of steps in which any state lay outside its bounds; worst violation is the largest single excursion, as a fraction of that variable's operating range. Every run is counted.}
 \label{tab:T1_measurement_noise}
 \begin{tabular}{lrrrlrrrrr}
 \toprule
-benchmark & sigma [\%] & N & reached band & IAE\_norm [IQR] & IAE\_norm worst & TV(u) rel. & violation rate & worst violation & failed solves \\
+benchmark & sigma [\%] & Runs (total) & Runs (completed) & IAE\_norm [IQR] & IAE\_norm worst & TV(u) rel. & violation rate & worst violation & failed solves \\
 \midrule
 CSTR & 0 & 20 & 20 & 1 [1, 1] & 1 & 1 & 0 & 0 & 0 \\
 CSTR & 0.1 & 20 & 20 & 0.996 [0.991, 1] & 1.007 & 1.54 & 0 & 0 & 0 \\

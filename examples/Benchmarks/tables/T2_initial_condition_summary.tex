@@ -1,9 +1,9 @@
 \begin{table}
-\caption{Robustness to the initial condition, over the 50-point Latin hypercube of each benchmark. The success rate is the empirical stand-in for the recursive-feasibility guarantee a neural MPC cannot offer. Every run is counted, including failures.}
+\caption{Robustness to the initial condition, over the 50-point Latin hypercube of each benchmark. The completion rate is the empirical stand-in for the recursive-feasibility guarantee a neural MPC cannot offer. Viol. rate is the mean over runs of the per-run fraction of steps in which any state lay outside its bounds; worst violation is the largest single excursion, as a fraction of that variable's operating range. Every run is counted, including failures.}
 \label{tab:T2_initial_condition_summary}
 \begin{tabular}{lrrrrrrrrrrr}
 \toprule
-benchmark & N\_total & N\_completed & success\_rate & IAE\_norm\_median & IAE\_norm\_q1 & IAE\_norm\_q3 & IAE\_norm\_worst & worst\_violation & violation\_rate & failed\_solves & RTF\_max \\
+benchmark & Runs (total) & Runs (completed) & completion\_rate & IAE\_norm\_median & IAE\_norm\_q1 & IAE\_norm\_q3 & IAE\_norm\_worst & worst\_violation & violation\_rate & failed\_solves & RTF\_max \\
 \midrule
 CSTR & 50 & 50 & 1 & 1 & 0.9158 & 1.141 & 1.37 & 0.08736 & 0.04833 & 0 & 0.04988 \\
 Cascaded two-tank & 50 & 50 & 1 & 1.055 & 0.9953 & 1.065 & 1.092 & 0 & 0 & 0 & 0.1036 \\

@@ -1,9 +1,9 @@
 \begin{table}
-\caption{Mismatch and disturbance cases. Recovery time is measured from the disturbance onset until the tracked variable re-enters the +-5 % band and stays; it is infinite when the run ends outside the band.}
+\caption{Mismatch and disturbance cases. Recovery time is measured from the disturbance onset until the tracked variable re-enters the +-5 \% band and stays; it is infinite when the run ends outside the band. Viol. rate is the mean over runs of the per-run fraction of steps in which any state lay outside its bounds; worst violation is the largest single excursion, as a fraction of that variable's operating range.}
 \label{tab:T3_mismatch_and_disturbance_cases}
 \begin{tabular}{llrrrrrrrrrrrrr}
 \toprule
-benchmark & case & median offset & median recovery [steps] & N\_total & N\_completed & success\_rate & IAE\_norm\_median & IAE\_norm\_q1 & IAE\_norm\_q3 & IAE\_norm\_worst & worst\_violation & violation\_rate & failed\_solves & RTF\_max \\
+benchmark & case & median offset & median recovery [steps] & Runs (total) & Runs (completed) & completion\_rate & IAE\_norm\_median & IAE\_norm\_q1 & IAE\_norm\_q3 & IAE\_norm\_worst & worst\_violation & violation\_rate & failed\_solves & RTF\_max \\
 \midrule
 CSTR & disturbance\_CA0 & -0.0271 & 0 & 4 & 4 & 1 & 1.519 & 1.171 & 1.923 & 2.168 & 0 & 0 & 0 & 0.03264 \\
 CSTR & disturbance\_Tin & 0.02632 & inf & 4 & 3 & 0.75 & 2.152 & 1.967 & 2.869 & 4.916 & 0.2019 & 0.4367 & 71 & 0.1199 \\

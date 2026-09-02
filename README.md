@@ -27,7 +27,7 @@ NeuralMPCX is a Python library for building and deploying Model Predictive Contr
 ### 1. Download or clone the repository
 
 ```bash
-git clone --branch v3.1.2 https://github.com/hzdr/neural-mpcx.git
+git clone --branch v3.1.3 https://github.com/hzdr/neural-mpcx.git
 cd neural-mpcx
 ```
 

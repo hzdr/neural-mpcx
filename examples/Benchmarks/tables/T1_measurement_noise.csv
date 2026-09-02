@@ -1,4 +1,4 @@
-benchmark,sigma [%],N,reached band,IAE_norm [IQR],IAE_norm worst,TV(u) rel.,violation rate,worst violation,failed solves
+benchmark,sigma [%],Runs (total),Runs (completed),IAE_norm [IQR],IAE_norm worst,TV(u) rel.,violation rate,worst violation,failed solves
 CSTR,0.0,20,20,"1 [1, 1]",1.0,1.0,0.0,0.0,0
 CSTR,0.1,20,20,"0.996 [0.991, 1]",1.0067057909893296,1.5401603396488008,0.0,0.0,0
 CSTR,0.5,20,20,"1.29 [1.19, 1.3]",1.4331305223505946,2.952877208919253,0.07916666666666668,0.013795989547077982,0

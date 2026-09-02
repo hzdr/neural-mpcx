@@ -147,7 +147,7 @@ def _fan_caption_text(info) -> str:
         f"Color is how far the plant has drifted from the model "
         f"($p_0$ = {p0}, $p_1$ = {p1}). The controller holds the nominal model "
         f"throughout and receives no measurement of the drift. "
-        f"N_total = {info['n_total']}, N_completed = {info['n_completed']}."
+        f"{info['n_completed']} of {info['n_total']} runs completed."
     )
 
 

@@ -28,7 +28,7 @@ the IAE is divided by its nominal run.
 
 Every function returns a number for every run, failed solves included. Failure
 is carried separately by ``n_failed_solves`` and ``completed``, and the table
-helpers report ``N_total`` beside ``N_completed``.
+helpers report ``Runs (total)`` beside ``Runs (completed)``.
 """
 
 from __future__ import annotations
@@ -176,7 +176,7 @@ def reached_band(
 ) -> bool:
     """Did the run end inside the ±``band_frac`` setpoint band?
 
-    One half of the success criterion; the other half is "no failed solve".
+    One half of the completion criterion; the other half is "no failed solve".
 
     Parameters
     ----------
@@ -189,9 +189,9 @@ def reached_band(
     The default checks the final segment because the two-tank nominal run fails
     the strict rule: it settles about 0.6 m below the h_2 = 2 m setpoint, which
     is a steady-state offset and not a divergence. Under the strict rule every
-    two-tank success rate would read 0 % and would measure that one known offset
-    instead of the factor under test. The store keeps both readings, so the
-    offset stays visible.
+    two-tank completion rate would read 0 % and would measure that one known
+    offset instead of the factor under test. The store keeps both readings, so
+    the offset stays visible.
     """
     tracked = np.asarray(tracked, dtype=float)
     n_steps = tracked.size

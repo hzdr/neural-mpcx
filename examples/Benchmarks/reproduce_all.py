@@ -151,8 +151,8 @@ SEVERITY_BUCKETS = [
 def _failures(metrics, root) -> int:
     """Triage report: where the solver failed, how badly, and driven by what.
 
-    A success rate gives the same number to a run that lost two steps and a run
-    infeasible from step nine. This separates them.
+    A completion rate gives the same number to a run that lost two steps and a
+    run infeasible from step nine. This separates them.
     """
     import numpy as np
 
@@ -291,7 +291,7 @@ def main(argv=None) -> int:
     if incomplete:
         print(f"\n{incomplete} of {len(metrics)} runs did not complete. They are "
               f"included in every aggregate and marked in every figure; see the "
-              f"N_total / N_completed columns in tables/.")
+              f"Runs (total) / Runs (completed) columns in tables/.")
     return 0
 
 

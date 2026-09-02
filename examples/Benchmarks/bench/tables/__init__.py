@@ -23,5 +23,5 @@ Every builder has the same shape::
 
 so ``reproduce_all.py`` can call them uniformly and report what was written.
 Each writes a CSV for further analysis and a LaTeX fragment for the paper, and
-each reports N_total alongside N_completed.
+each reports Runs (total) alongside Runs (completed).
 """

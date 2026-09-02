@@ -5,6 +5,25 @@ All notable changes to NeuralMPCX will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.1.3] - 2026-09-02
+
+### Changed
+
+- **`neural_vs_nmpc` is back in `T0` and `T6`.** Both captions now say where its 
+  failures come from: all 139 belong to the
+  physics-NMPC arm, and the neural controller failed no solve there. `T0`'s exp3
+  CSTR row therefore reads 217 runs and 210 failed solves.
+- **`success_rate` is now `completion_rate`,** in `T0`, `T2` and `T3`.
+- **Run counts are `Runs (total)` and `Runs (completed)`,** not `N_total` and
+  `N_completed`. `T1`'s `reached band` column becomes `Runs (completed)` and now 
+  reads `completed`.
+- **The captions define the violation rate**: TV(u) is a dimensionless
+  sum of span fractions, median over the 20 noise-free replicates.
+
+### Fixed
+
+- **`T0` and `T3` captions fixed the raw `%`,**
+
 ## [3.1.2] - 2026-08-31
 
 ### Added

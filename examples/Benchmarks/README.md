@@ -52,8 +52,8 @@ python examples/Benchmarks/reproduce_all.py --smoke           # 25 figures + 10 
 It reads `configs_smoke/` and writes to `results_smoke/`, `figures_smoke/` and
 `tables_smoke/`, leaving the real store untouched. A smoke run produces no
 results: its simulations are 10-30 steps, so almost nothing reaches the setpoint
-band and the success rates are low by construction. What it establishes is that
-every code path runs, every figure draws and every table builds.
+band and the completion rates are low by construction. What it establishes is
+that every code path runs, every figure draws and every table builds.
 
 ## Reproducing the figures and tables
 
@@ -195,10 +195,11 @@ share one axis. The absolute values live in `results/normalizers.json` and in
 variable inside the ±50 % band at the end of the run`. Three band widths appear
 in this suite and they are not interchangeable: `reached_band` and so `completed`
 use ±50 % (`metrics.reached_band`, `band_frac=0.5`), `settling_steps` uses ±25 %,
-and `recovery_steps` uses ±5 %. Every table reports
-`N_total` beside `N_completed`, every median is taken over all runs with
-non-finite values ranked worst, and every figure marks a failed run with an X in
-a distinct color.
+and `recovery_steps` uses ±5 %. The tables report this as `completion_rate` since 
+it is a completion check. Every table reports `Runs (total)`
+beside `Runs (completed)`, every median is taken over all runs with non-finite
+values ranked worst, and every figure marks a failed run with an X in a distinct
+color.
 
 ## Limitations
 

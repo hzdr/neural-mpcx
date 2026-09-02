@@ -21,7 +21,7 @@ A neural MPC comes with no recursive-feasibility guarantee, so the region is
 established by sampling it. ``exp2_fan`` draws all 50 Latin-hypercube
 trajectories, colored by how far each initial state sits from nominal, with a
 median, a 5–95 % band and the inadmissible side of each constraint shaded. The
-success rate over the same runs is in ``T2_initial_condition_summary``.
+completion rate over the same runs is in ``T2_initial_condition_summary``.
 """
 
 from __future__ import annotations
@@ -135,7 +135,7 @@ def _caption_text(info) -> str:
         f"around the nominal state, each run to completion. This sample is the "
         f"study's empirical substitute for a recursive-feasibility guarantee. "
         f"Shading marks the inadmissible side of each state constraint. "
-        f"N_total = {info['n_total']}, N_completed = {info['n_completed']}."
+        f"{info['n_completed']} of {info['n_total']} runs completed."
     )
 
 

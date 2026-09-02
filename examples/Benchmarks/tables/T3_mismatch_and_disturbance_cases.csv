@@ -1,4 +1,4 @@
-benchmark,case,median offset,median recovery [steps],N_total,N_completed,success_rate,IAE_norm_median,IAE_norm_q1,IAE_norm_q3,IAE_norm_worst,worst_violation,violation_rate,failed_solves,RTF_max
+benchmark,case,median offset,median recovery [steps],Runs (total),Runs (completed),completion_rate,IAE_norm_median,IAE_norm_q1,IAE_norm_q3,IAE_norm_worst,worst_violation,violation_rate,failed_solves,RTF_max
 CSTR,disturbance_CA0,-0.027102225029714433,0.0,4,4,1.0,1.519240049857991,1.1713077778688978,1.9232889300586495,2.1681278934060355,0.0,0.0,0,0.032642066666287266
 CSTR,disturbance_Tin,0.026322864028987425,inf,4,3,0.75,2.152282953001009,1.967396537188705,2.8692100616787197,4.916258390947316,0.20189690195892313,0.43666666666666665,71,0.11991563888861695
 CSTR,disturbance_none,-0.026929247531439104,,1,1,1.0,1.5164583615646787,1.5164583615646787,1.5164583615646787,1.5164583615646787,0.0,0.0,0,0.03010228333166904

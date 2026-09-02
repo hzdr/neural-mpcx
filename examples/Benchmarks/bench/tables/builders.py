@@ -18,8 +18,8 @@
 """Every table in the study.
 
 One rule governs all of them: no aggregate excludes a failed run. Every table
-reports ``N_total`` beside ``N_completed``, and every median covers all runs
-with non-finite values ranked worst.
+reports ``Runs (total)`` beside ``Runs (completed)``, and every median covers all
+runs with non-finite values ranked worst.
 
 Each builder writes a CSV and a LaTeX fragment, and returns the paths it wrote.
 """
@@ -81,9 +81,9 @@ def _summary_row(group: pd.DataFrame, column: str = "iae_norm") -> Dict[str, flo
     n_total = len(group)
     n_completed = int(group["completed"].sum())
     return {
-        "N_total": n_total,
-        "N_completed": n_completed,
-        "success_rate": n_completed / n_total if n_total else np.nan,
+        "Runs (total)": n_total,
+        "Runs (completed)": n_completed,
+        "completion_rate": n_completed / n_total if n_total else np.nan,
         "IAE_norm_median": stats["median"],
         "IAE_norm_q1": stats["q1"],
         "IAE_norm_q3": stats["q3"],
@@ -111,24 +111,18 @@ VARIED = {
     "exp5": "nothing (nominal reference)",
 }
 
-#: Cases held out of the headline aggregates. ``neural_vs_nmpc`` runs both
-#: controllers over one mismatch grid, so folding it into exp3 counts that grid
-#: twice and charges the physics solver's failures to the neural controller. It
-#: keeps its own row in T3 and its own figure.
-AGGREGATE_EXCLUDED = ("neural_vs_nmpc",)
-
 
 def robustness_at_a_glance(metrics: pd.DataFrame, outdir: Path) -> List[Path]:
     """Every experiment and benchmark, one row each: the summary table.
 
-    Columns: what varied, N_total / N_completed, success rate, median IAE with
-    its interquartile range, worst constraint violation and failed solves.
+    Columns: what varied, Runs (total) / Runs (completed), completion rate,
+    median IAE with its interquartile range, worst constraint violation and
+    failed solves.
 
     Solve times stay out. The timing experiment ran on a different machine from
     the rest of the store, so one RTF column here would compare two hosts.
     :func:`exp4_rtf_grid` reports them where they are comparable.
     """
-    metrics = metrics[~metrics["case"].isin(AGGREGATE_EXCLUDED)]
     rows = []
     for (exp, bench_key), group in metrics.groupby(["experiment", "benchmark"]):
         summary = _summary_row(group)
@@ -145,18 +139,19 @@ def robustness_at_a_glance(metrics: pd.DataFrame, outdir: Path) -> List[Path]:
                            frame["IAE_norm_q3"])
     ]
     display = frame[[
-        "experiment", "benchmark", "what varied", "N_total", "N_completed",
-        "success_rate", "IAE_norm [IQR]", "worst_violation", "failed_solves",
+        "experiment", "benchmark", "what varied", "Runs (total)",
+        "Runs (completed)", "completion_rate", "IAE_norm [IQR]",
+        "worst_violation", "failed_solves",
     ]]
     return _write(
         display, "T0_robustness_at_a_glance", outdir,
         caption=(
-            "Robustness at a glance. Success = no failed solve and the tracked "
-            "variable inside the +-50 % setpoint band at the end of the run. "
-            "Violations are expressed as a fraction of each variable's operating "
-            "range. All aggregates include failed runs. The paired "
-            "neural-versus-physics cases are excluded here and reported on their "
-            "own; see T3."
+            "Robustness at a glance."
+            "Violations are expressed as a fraction of each "
+            "variable's operating range. All aggregates include failed runs. "
+            "The exp3 CSTR failed solves are dominated by the physics-NMPC arm "
+            "of the paired neural\\_vs\\_nmpc case (139 of 210); the neural "
+            "controller failed no solve there."
         ),
     )
 
@@ -189,8 +184,8 @@ def exp1_noise(metrics: pd.DataFrame, outdir: Path) -> List[Path]:
             rows.append({
                 "benchmark": _config.BENCHMARKS[bench_key].label,
                 "sigma [%]": float(sigma),
-                "N": len(group),
-                "reached band": int(group["reached_band"].sum()),
+                "Runs (total)": len(group),
+                "Runs (completed)": int(group["completed"].sum()),
                 "IAE_norm [IQR]": (f"{stats['median']:.3g} [{stats['q1']:.3g}, "
                                    f"{stats['q3']:.3g}]"),
                 "IAE_norm worst": float(finite.max()) if finite.size else np.nan,
@@ -213,8 +208,14 @@ def exp1_noise(metrics: pd.DataFrame, outdir: Path) -> List[Path]:
             f"benchmarks; every level holds 20 seeded replicates under common "
             f"random numbers. TV(u) is each actuator's travel in fractions of "
             f"its own span, summed over the run, divided by the noise-free run "
-            f"of the same benchmark; the anchors are {anchor_text}. Violations "
-            f"are a fraction of the operating range. Every run is counted."
+            f"of the same benchmark. That sum is dimensionless so it is  "
+            f"comparable to no single channel; on its own "
+            f"the anchors, medians over the 20 noise-free "
+            f"replicates, are {anchor_text}. Viol. rate is the mean over runs "
+            f"of the per-run fraction of steps in which any state lay outside "
+            f"its bounds; worst violation is the largest single excursion, as "
+            f"a fraction of that variable's operating range. Every run is "
+            f"counted."
         ),
     )
 
@@ -234,9 +235,14 @@ def exp2_summary(metrics: pd.DataFrame, outdir: Path) -> List[Path]:
         pd.DataFrame(rows), "T2_initial_condition_summary", outdir,
         caption=(
             "Robustness to the initial condition, over the 50-point Latin "
-            "hypercube of each benchmark. The success rate is the empirical "
+            "hypercube of each benchmark. The completion rate is the empirical "
             "stand-in for the recursive-feasibility guarantee a neural MPC "
-            "cannot offer. Every run is counted, including failures."
+            "cannot offer."
+            "Viol. rate is the mean "
+            "over runs of the per-run fraction of steps in which any state lay "
+            "outside its bounds; worst violation is the largest single "
+            "excursion, as a fraction of that variable's operating range. "
+            "Every run is counted, including failures."
         ),
     )
 
@@ -296,8 +302,12 @@ def exp3_cases(metrics: pd.DataFrame, outdir: Path) -> List[Path]:
         "T3_mismatch_and_disturbance_cases", outdir,
         caption=(
             "Mismatch and disturbance cases. Recovery time is measured from the "
-            "disturbance onset until the tracked variable re-enters the +-5 % "
-            "band and stays; it is infinite when the run ends outside the band."
+            "disturbance onset until the tracked variable re-enters the "
+            "+-5 \\% band and stays; it is infinite when the run ends outside "
+            "the band. Viol. rate is the mean over runs of the per-run "
+            "fraction of steps in which any state lay outside its bounds; "
+            "worst violation is the largest single excursion, as a fraction of "
+            "that variable's operating range."
         ),
     )
 
@@ -508,7 +518,7 @@ def solver_failures(metrics: pd.DataFrame, outdir: Path,
     """Where the solver failed, and whether it failed briefly or persistently.
 
     A run that lost two steps out of a thousand and a run infeasible from step
-    nine both read as "failed" in a success rate, though the first is a
+    nine both read as "failed" in a completion rate, though the first is a
     transient the warm start recovered from and the second is a controller that
     stopped working. This table separates them per case.
 
@@ -528,7 +538,6 @@ def solver_failures(metrics: pd.DataFrame, outdir: Path,
         with the severity, it separates a loop that degraded from one that
         never got going.
     """
-    metrics = metrics[~metrics["case"].isin(AGGREGATE_EXCLUDED)]
     rows = []
     for (exp, bench_key, case), group in metrics.groupby(
         ["experiment", "benchmark", "case"]
@@ -578,8 +587,10 @@ def solver_failures(metrics: pd.DataFrame, outdir: Path,
         caption=(
             "Solver failures by case. Severity is the per-run fraction of steps "
             "whose solve failed: near zero means isolated transients, near one "
-            "means the problem was infeasible for most of the run. Failed runs "
-            "stay in every other aggregate in this study."
+            "means the problem was infeasible for most of the run. Every "
+            "failure in the paired neural\\_vs\\_nmpc case belongs to the "
+            "physics NMPC; the neural controller failed no solve there. Failed "
+            "runs stay in every other aggregate in this study."
         ),
     )
 

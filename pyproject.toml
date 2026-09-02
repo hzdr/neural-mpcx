@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "neuralmpcx"
-version = "3.1.2"
+version = "3.1.3"
 description = "Model Predictive Control toolkit with neural MPC support (CasADi-friendly)."
 readme = "README.md"
 requires-python = ">=3.9"

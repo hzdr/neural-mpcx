@@ -143,7 +143,7 @@ def _caption_text(info) -> str:
         f"seeded realizations each, common random numbers throughout; the "
         f"black line is the median over every level. Shading marks the "
         f"inadmissible side of the constraint.{thinning} "
-        f"N_total = {info['n_total']}, N_completed = {info['n_completed']}."
+        f"{info['n_completed']} of {info['n_total']} runs completed."
     )
 
 
