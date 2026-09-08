@@ -5,6 +5,23 @@ All notable changes to NeuralMPCX will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `spec.md` as the repository specification for Standard Readme compliance.
+- `tests/test_readme_spec.py` to validate README structure, links, and metadata consistency.
+- `lint-readme-spec` pre-commit hook in `.pre-commit-config.yaml`.
+
+### Changed
+
+- Rewrote `README.md` to conform to the Standard Readme specification and clean technical prose.
+- Updated `CONTRIBUTING.md` with README consistency and linting instructions.
+
+### Fixed
+
+- Fixed broken link to license file in `README.md` (`LICENSE.txt` -> `LICENSE`).
+
 ## [3.1.3] - 2026-09-02
 
 ### Changed

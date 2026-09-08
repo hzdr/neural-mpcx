@@ -45,6 +45,27 @@ Or use pre-commit to run them automatically:
 pre-commit run --all-files
 ```
 
+### README Specification and Linting
+
+`README.md` conforms to the [Standard Readme](https://github.com/RichardLitt/standard-readme) specification (see [spec.md](spec.md)).
+
+NeuralMPCX includes a native validator in `tests/test_readme_spec.py`.
+
+The validator enforces:
+- Section order and required headings (`Background`, `Install`, `Usage`, `API`, `Maintainers`, `Thanks`, `Contributing`, `License`)
+- License as the final section
+- Alignment between `README.md` description and `pyproject.toml`
+- Internal anchor links and relative file targets
+- Adverb and em-dash restrictions
+
+Run the validator with Python or pytest:
+
+```bash
+python tests/test_readme_spec.py
+```
+
+Pre-commit runs this check when `README.md` or `pyproject.toml` changes.
+
 ### Commit Messages
 
 Follow [Conventional Commits](https://www.conventionalcommits.org/):
