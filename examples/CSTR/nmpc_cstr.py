@@ -551,7 +551,6 @@ class NMPC(Mpc[cs.MX]):
     n_inputs = 2
     n_outputs = 4
 
-    @staticmethod
     def _norm_val(val, key):
         return (val - Y_NORM_PARAMS[key]["min"]) / (
             Y_NORM_PARAMS[key]["max"] - Y_NORM_PARAMS[key]["min"]
@@ -609,6 +608,8 @@ class NMPC(Mpc[cs.MX]):
         "x_scaling": np.asarray([1, 1, 1, 1], dtype=float),
         "u_scaling": np.asarray([1, 1], dtype=float),
     }
+
+    _norm_val = staticmethod(_norm_val)
 
     def __init__(self, cfg: "Optional[RunConfig]" = None) -> None:
         """Initialize NMPC problem with explicit CSTR dynamics.

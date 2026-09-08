@@ -480,7 +480,6 @@ class NMPC(Mpc[cs.MX]):
     n_disturbances = 1      # Q_dot (heat removal), held constant in solve_mpc
     n_outputs = 4
 
-    @staticmethod
     def _norm_val(val, key):
         return (val - Y_NORM_PARAMS[key]["min"]) / (
             Y_NORM_PARAMS[key]["max"] - Y_NORM_PARAMS[key]["min"]
@@ -538,6 +537,8 @@ class NMPC(Mpc[cs.MX]):
         "x_scaling": np.asarray([1, 1, 1, 1], dtype=float),
         "u_scaling": np.asarray([1], dtype=float),
     }
+
+    _norm_val = staticmethod(_norm_val)
 
     def __init__(self) -> None:
         """Initialize NMPC problem with explicit CSTR dynamics.

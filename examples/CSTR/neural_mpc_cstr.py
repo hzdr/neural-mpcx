@@ -574,7 +574,6 @@ class NeuralMpc(Mpc[cs.MX]):
     sequence_length = horizon + n_context
     batch_size = 1
 
-    @staticmethod
     def _norm_val(val, key):
         return (val - Y_NORM_PARAMS[key]["min"]) / (
             Y_NORM_PARAMS[key]["max"] - Y_NORM_PARAMS[key]["min"]
@@ -632,6 +631,8 @@ class NeuralMpc(Mpc[cs.MX]):
         "x_scaling": np.asarray([1, 1, 1, 1], dtype=float),
         "u_scaling": np.asarray([1, 1], dtype=float),
     }
+
+    _norm_val = staticmethod(_norm_val)
 
     def __init__(self, cfg: "Optional[RunConfig]" = None) -> None:
         """Initialize Neural MPC problem with LSTM dynamics.

@@ -3,6 +3,7 @@
 ![NeuralMPCX Logo](fig/NeuralMPCX_LOGO_banner.png)
 
 [![standard-readme compliant](https://img.shields.io/badge/readme%20style-standard-brightgreen.svg?style=flat-square)](https://github.com/RichardLitt/standard-readme)
+[![PyPI](https://img.shields.io/pypi/v/neuralmpcx)](https://pypi.org/project/neuralmpcx/)
 [![Python](https://img.shields.io/badge/python-%3E%3D3.9-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![DOI](https://rodare.hzdr.de/badge/1180898465.svg)](https://rodare.hzdr.de/badge/latestdoi/1180898465)
@@ -11,7 +12,7 @@ Model Predictive Control toolkit with neural MPC support (CasADi-friendly).
 
 NeuralMPCX is a Python library for building and deploying Model Predictive Controllers with linear, nonlinear, and neural dynamics. The software interfaces CasADi and IPOPT to solve constrained optimal control problems with recurrent neural networks (RNN, LSTM) and state-space systems.
 
-Note on Naming: The repository and directory use the name `neural-mpcx`. The package name in Python and package managers is `neuralmpcx`. Install with `pip install -e .` and import with `import neuralmpcx`.
+Note on Naming: The repository and directory use the name `neural-mpcx`. The package name in Python and package managers is `neuralmpcx`. Install with `pip install neuralmpcx` and import with `import neuralmpcx`.
 
 ## Table of Contents
 
@@ -62,24 +63,24 @@ Academic references:
 
 ## Install
 
-Clone the repository and install with pip:
+Install the package directly from PyPI:
 
 ```bash
-git clone --branch v3.1.4 https://github.com/hzdr/neural-mpcx.git
-cd neural-mpcx
-pip install -e .
+pip install neuralmpcx
 ```
 
 To install with PyTorch support:
 
 ```bash
-pip install -e .[torch]
+pip install "neuralmpcx[torch]"
 ```
 
-To install development tools:
+To install from source for development:
 
 ```bash
-pip install -e .[dev]
+git clone https://github.com/hzdr/neural-mpcx.git
+cd neural-mpcx
+pip install -e ".[dev]"
 ```
 
 ### Dependencies
@@ -436,7 +437,7 @@ Cite this software in academic publications:
   author = {Lopes J{\'u}nior, {\^E}nio and Reinecke, Sebastian Felix},
   year   = {2026},
   url    = {https://github.com/hzdr/neural-mpcx},
-  doi    = {10.14278/rodare.4991}
+  doi    = {10.14278/rodare.5008}
 }
 ```
 
