@@ -51,7 +51,7 @@ jobs:
           pytest -v --cov=neuralmpcx --cov-report=xml --cov-report=term
 
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: matrix.python-version == '3.11' && matrix.os == 'ubuntu-latest' && matrix.variant == 'full'
         with:
           name: coverage-report
