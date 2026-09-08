@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- GitHub Actions CI/CD workflows under `.github/workflows/`:
+  - `lint.yml`: automated linting (`ruff check`), type checking (`mypy`), and standard README spec validation (`tests/test_readme_spec.py`).
+  - `test.yml`: matrix testing across Python 3.9–3.12 on Ubuntu and Windows with core and PyTorch variants.
+  - `metadata.yml`: automated `CITATION.cff` validation (`cffconvert`) and distribution packaging checks (`build` + `twine check`).
+  - `release.yml`: automated PyPI distribution builds and publishing via OIDC Trusted Publishing (`environment: pypi`), alongside GitHub Release drafting and Rodare DOI archiving on tag push.
+- Automated dependency management via `.github/dependabot.yml` covering GitHub Actions and pip packages.
 - `spec.md` as the repository specification for Standard Readme compliance.
 - `tests/test_readme_spec.py` to validate README structure, links, and metadata consistency.
 - `lint-readme-spec` pre-commit hook in `.pre-commit-config.yaml`.
@@ -21,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - Fixed broken link to license file in `README.md` (`LICENSE.txt` -> `LICENSE`).
+- Resolved trailing whitespace formatting warnings across `src/neuralmpcx/` modules flagged by `ruff`.
 
 ## [3.1.3] - 2026-09-02
 

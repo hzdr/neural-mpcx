@@ -1,5 +1,5 @@
 # Copyright 2024-2026 Helmholtz-Zentrum Dresden-Rossendorf e.V. (HZDR)
-# Authors: 
+# Authors:
 # - Ênio Lopes Júnior
 # - Sebastian Felix Reinecke
 #

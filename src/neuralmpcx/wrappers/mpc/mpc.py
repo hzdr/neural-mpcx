@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2024-2026 Helmholtz-Zentrum Dresden-Rossendorf e.V. (HZDR)
-# Authors: 
+# Authors:
 # - Ênio Lopes Júnior
 # - Sebastian Felix Reinecke
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -218,7 +218,7 @@ class Mpc(NonRetroactiveWrapper[SymType]):
         A None or a dict containing all tuning parameters (e.g. cost function weighting matrices, slack penalty matrices etc.)
     n_context: int
         A positive integer for the context inputs used to warmup the Neural Network Model.
-        At every MPC computation, the LSTM hidden/cell states are estimated numerically by warm-up over 
+        At every MPC computation, the LSTM hidden/cell states are estimated numerically by warm-up over
         a context window of ``n_context`` past observations.
     control_horizon : int, optional
         A positive integer for the control horizon of the MPC controller. If not given,

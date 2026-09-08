@@ -1,0 +1,44 @@
+name: Lint & Style
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint, Typing & Spec Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install black
+
+      - name: Ruff Lint Check
+        run: |
+          ruff check src tests
+
+      - name: Type Checking with Mypy
+        run: |
+          mypy src
+
+      - name: Check Standard Readme Specification
+        run: |
+          python tests/test_readme_spec.py
+
+      - name: Code Formatting Check (Black)
+        run: |
+          black --check src tests
+        continue-on-error: true
