@@ -5,7 +5,7 @@ All notable changes to NeuralMPCX will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [3.1.4] - 2026-09-08
 
 ### Added
 
@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Fixed broken link to license file in `README.md` (`LICENSE.txt` -> `LICENSE`).
 - Resolved trailing whitespace formatting warnings across `src/neuralmpcx/` modules flagged by `ruff`.
+- Guarded benchmark tests (`tests/test_benchmarks.py`) with `pytest.importorskip("torch")`, ensuring the test suite passes cleanly in core environments without optional PyTorch installed.
 
 ## [3.1.3] - 2026-09-02
 

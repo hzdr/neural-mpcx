@@ -65,7 +65,7 @@ Academic references:
 Clone the repository and install with pip:
 
 ```bash
-git clone --branch v3.1.3 https://github.com/hzdr/neural-mpcx.git
+git clone --branch v3.1.4 https://github.com/hzdr/neural-mpcx.git
 cd neural-mpcx
 pip install -e .
 ```

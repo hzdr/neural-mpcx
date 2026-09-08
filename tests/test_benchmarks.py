@@ -102,6 +102,7 @@ def test_identical_noise_realisation_across_sigma(benchmark):
 
 
 def _load_plant_module(benchmark):
+    pytest.importorskip("torch")
     example_dir = ROOT / (
         "examples/CSTR" if benchmark == "cstr"
         else "examples/Cascaded_Two_Tank_System"
