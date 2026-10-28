@@ -5,6 +5,24 @@ All notable changes to NeuralMPCX will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.1.5] - 2026-10-28
+
+### Added
+
+- Added a CSTR LSTM training script and notebook with supporting identification data.
+- Added zero-state versus context-initialized LSTM analysis to both training notebooks, comparing open-loop predictions on identical test windows and per-window MAE distributions.
+- Added opt-in `remove_unobservable_integrators` to `mimo_tf2ss`, preserving input/output behavior, with realization and estimator regression tests.
+
+### Changed
+
+- Completed and validated README snippets for linear, nonlinear, and neural MPC, plus AKF, EKF, augmented EKF, and MHE.
+- Simplified MPC setup and cost expressions in the CSTR, two-tank, and grinding-circuit examples while preserving controller results.
+- Replaced individual random-window error traces with mean curves, shaded ±1σ bands, and mean/σ values in each output's legend.
+
+### Fixed
+
+- Corrected the grinding-circuit Kalman filter bias configuration and removed three unobservable integrator states (54 to 51 states), retaining the physical sump-level integrator.
+
 ## [3.1.4] - 2026-09-08
 
 ### Added

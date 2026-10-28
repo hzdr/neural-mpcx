@@ -235,7 +235,7 @@ class LinearMpc(Mpc[cs.MX]):
         Y_ub_f = self.parameter("Y_ub_f", (ny, 1))
         Q      = self.parameter("Q",  (ny, ny))
         R      = self.parameter("R",  (nu, nu))
-        SP     = self.parameter("SP", (ny, 1))
+        SP     = self.parameter("SP", (ny, 1))  # solve_mpc() expects this name.
         w      = self.parameter("w",  (1, 1))
 
         du_bias = self.parameter("du_bias", (nu, 1))
@@ -244,28 +244,31 @@ class LinearMpc(Mpc[cs.MX]):
         x, _          = self.state("x", nx, bound_initial=False)
         dev_u, dev_u_exp, u0 = self.action("du", nu, lb=a_bnd[0], ub=a_bnd[1])
 
-        ddev_u = [dev_u_exp[:, 0] - u0]
-        for t in range(1, M):
-            ddev_u.append(dev_u_exp[:, t] - dev_u_exp[:, t - 1])
-        ddev_u = cs.hcat(ddev_u)
+        ddev_u = cs.horzcat(
+            dev_u[:, :1] - u0,
+            dev_u[:, 1:] - dev_u[:, :-1],
+        )
 
         s1, _, _ = self.variable("s1", (ny, N - 1), lb=0)
         s2, _, _ = self.variable("s2", (ny, 1),     lb=0)
 
         x_sym    = cs.MX.sym("x",    nx)
         dev_u_sym = cs.MX.sym("dev_u", nu)
-        Ad_cs = cs.DM(A_d);  Bd_cs = cs.DM(B_d)
-        Cd_cs = cs.DM(C_d);  Dd_cs = cs.DM(D_d)
+        Ad_cs, Bd_cs = cs.DM(A_d), cs.DM(B_d)
+        Cd_cs, Dd_cs = cs.DM(C_d), cs.DM(D_d)
 
         F = cs.Function("F", [x_sym, dev_u_sym],
                         [Ad_cs @ x_sym + Bd_cs @ dev_u_sym],
                         {"allow_free": True, "cse": True})
         self.set_dynamics(F)
 
-        Y_cols = [Cd_cs @ x[:, t] + Dd_cs @ (dev_u_exp[:, t-1] + du_bias) + dy_bias
-                  for t in range(1, N)]
-        YN = Cd_cs @ x[:, N] + Dd_cs @ (dev_u_exp[:, N-1] + du_bias) + dy_bias
-        Y  = cs.hcat(Y_cols + [YN]) + cs.repmat(cs.DM(self.y_offset), 1, N)
+        # Future outputs exclude the initial-state column and include plant offsets.
+        Y = (
+            Cd_cs @ x[:, 1:]
+            + Dd_cs @ (dev_u_exp + du_bias)
+            + dy_bias + cs.DM(self.y_offset)
+        )
+        E = Y - SP
 
         self.constraint("Y_lb",   cs.repmat(Y_lb,   1, N-1) - s1, "<=", Y[:, :-1])
         self.constraint("Y_ub",   Y[:, :-1], "<=", cs.repmat(Y_ub,   1, N-1) + s1)
@@ -277,25 +280,20 @@ class LinearMpc(Mpc[cs.MX]):
         self.constraint("delta_u3", cs.fabs(ddev_u[2, :]), "<=", 5 * Ts_mul)
         self.constraint("delta_u4", cs.fabs(ddev_u[3, :]), "<=", 4 * Ts_mul)
 
-        auxY = cs.MX(1, N)
-        for t in range(N - 1):
-            auxY[0, t] = cs.bilin(Q, Y[:, t] - SP) + w * cs.sum1(s1[:, t])
-
-        auxU = cs.MX(1, M)
-        for t in range(M):
-            auxU[0, t] = cs.bilin(R, ddev_u[:, t])
-
-        gamN = cs.DM(gamma ** np.arange(N)).T
-        gamM = cs.DM(gamma ** np.arange(M)).T
+        Q_cost = sum(
+            gamma**t * (cs.bilin(Q, E[:, t]) + w * cs.sum1(s1[:, t]))
+            for t in range(N - 1)
+        )
+        R_cost = sum(gamma**t * cs.bilin(R, ddev_u[:, t]) for t in range(M))
 
         Qy = self.fixed_pars["Q"]
         Rv = self.fixed_pars["R"]
         Qx = np.asarray(C_d).T @ Qy @ np.asarray(C_d)
         _, P = dlqr(A_d, B_d, Qx, Rv)
         H_s = cs.DM(C_d @ P @ C_d.T)
-        S   = cs.DM(gamma**N) * (cs.bilin(H_s, Y[:, -1] - SP) + w * cs.sum1(s2))
+        Q_term = gamma**N * (cs.bilin(H_s, E[:, -1]) + w * cs.sum1(s2))
 
-        self.minimize(cs.sum2(gamN * auxY) + cs.sum2(gamM * auxU) + S)
+        self.minimize(Q_cost + R_cost + Q_term)
 
         opts = {
             "print_time": False,
@@ -329,9 +327,8 @@ def mk_seed(rng):
     return int(rng.integers(np.iinfo(np.uint32).max + 1))
 
 
-if __name__ == "__main__":
-    simulation_time = np.int64(240)
-
+def grinding_model(Ts=30.0, *, remove_unobservable_integrators=True):
+    """Build the circuit model, retaining one observable sump-level integrator."""
     TF = TransferFunctionTerm
     G = {
         (0, 0): [TF(gain=-0.58, delay=41.0, time_constants=[83.0])],
@@ -353,8 +350,17 @@ if __name__ == "__main__":
         (3, 2): [TF(gain=0.032, has_integrator=True)],
         (3, 3): [TF(gain=-0.031, has_integrator=True)],
     }
+    return mimo_tf2ss(
+        G, ny=4, nu=4, Ts=Ts, pade_order=2,
+        balanced=False,  # The physical sump-level integrator is not Hurwitz.
+        remove_unobservable_integrators=remove_unobservable_integrators,
+    )
+
+
+if __name__ == "__main__":
+    simulation_time = np.int64(240)
     Ts_mul = 0.5
-    ss = mimo_tf2ss(G, ny=4, nu=4, Ts=Ts_mul * 60.0, pade_order=2)
+    ss = grinding_model(Ts=Ts_mul * 60.0)
     Ad, Bd, Cd, Dd = ss.Ad, ss.Bd, ss.Cd, ss.Dd
     Ts = ss.Ts
 
@@ -364,12 +370,16 @@ if __name__ == "__main__":
 
     nx = Ad.shape[0];  ny = Cd.shape[0];  nu = Bd.shape[1]
 
+    # Estimate output biases for Sp, Dm, and Fc; Ls already has integrating dynamics.
+    dy_index = [0, 1, 2]
     Q_x  = np.eye(nx) * 0.1
-    Q_du = np.eye(nu) * 0.01
-    Q_dy = np.eye(ny) * 0.01
+    Q_dy = np.eye(len(dy_index)) * 0.01
     R_kal = np.eye(ny) * 1.0
-    kf = AugmentedKalmanFilter(Ad, Bd, Cd, Dd,
-                               Q_x=Q_x, Q_du=Q_du, Q_dy=Q_dy, R=R_kal)
+    kf = AugmentedKalmanFilter(
+        Ad, Bd, Cd, Dd,
+        du_index=[], dy_index=dy_index,
+        Q_x=Q_x, Q_dy=Q_dy, R=R_kal,
+    )
 
     setpoint_values     = np.array([[72,73,72,71],[79,79,79,79],
                                     [151,151,151,151],[1.15,1.15,1.15,1.15]],

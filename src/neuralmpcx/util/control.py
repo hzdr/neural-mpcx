@@ -445,6 +445,39 @@ def _balanced_realization(
     return T_inv @ A @ T, T_inv @ B, C @ T
 
 
+def _remove_unobservable_integrators(
+    A: npt.NDArray[np.floating],
+    B: npt.NDArray[np.floating],
+    C: npt.NDArray[np.floating],
+) -> Tuple[
+    npt.NDArray[np.floating],
+    npt.NDArray[np.floating],
+    npt.NDArray[np.floating],
+]:
+    """Project out unobservable zero eigenvalues of a continuous-time model.
+
+    A direction in the null space of ``[A; C]`` is a constant state that never
+    reaches an output. Its orthogonal complement defines an equivalent output
+    realization. Repeating the projection also removes unobservable integrator
+    chains. Observable integrators and other modes are retained to numerical
+    precision; this is not a general minimal-realization algorithm.
+    """
+    while A.shape[0]:
+        stacked = np.vstack((A, C))
+        _, singular_values, Vt = np.linalg.svd(stacked, full_matrices=False)
+        tolerance = (
+            np.finfo(singular_values.dtype).eps
+            * max(stacked.shape)
+            * singular_values[0]
+        )
+        rank = int(np.count_nonzero(singular_values > tolerance))
+        if rank == A.shape[0]:
+            break
+        basis = Vt[:rank].T
+        A, B, C = basis.T @ A @ basis, basis.T @ B, C @ basis
+    return A, B, C
+
+
 def mimo_tf2ss(
     G: Dict[Tuple[int, int], List[TransferFunctionTerm]],
     ny: int,
@@ -454,6 +487,7 @@ def mimo_tf2ss(
     method: Literal["zoh", "foh", "impulse", "tustin", "bilinear"] = "zoh",
     store_continuous: bool = True,
     balanced: bool = True,
+    remove_unobservable_integrators: bool = False,
 ) -> DiscreteStateSpace:
     """Convert a MIMO transfer function matrix to discrete state-space form.
 
@@ -483,8 +517,16 @@ def mimo_tf2ss(
         Gramians, giving the best-conditioned numerically equivalent
         representation.  Requires all eigenvalues of A to be strictly in the
         open left-half plane (Hurwitz).  A ``UserWarning`` is emitted and the
-        unbalanced (controllable canonical) form is kept when the system
+        unbalanced realization is kept when the system
         contains integrators or other marginally stable/unstable modes.
+    remove_unobservable_integrators : bool, optional
+        If True, removes unobservable continuous-time integrator directions
+        before balancing and discretization. Separate integrating transfer
+        functions feeding one output can introduce redundant integrator states.
+        Orthogonal projections preserve their input/output behavior, including
+        the observable integrator. State coordinates and dimension can change;
+        initial states and state covariances must use the returned realization.
+        Default False leaves the assembled model unreduced.
 
     Returns
     -------
@@ -511,6 +553,11 @@ def mimo_tf2ss(
     # Assemble continuous MIMO state-space
     A_cont, B_cont, C_cont, D_cont = _assemble_mimo_ss(G, ny, nu, pade_order)
 
+    if remove_unobservable_integrators:
+        A_cont, B_cont, C_cont = _remove_unobservable_integrators(
+            A_cont, B_cont, C_cont
+        )
+
     # Apply balanced realization (similarity transform for best conditioning)
     if balanced and A_cont.size > 0:
         eigs = np.linalg.eigvals(A_cont)
@@ -522,7 +569,7 @@ def mimo_tf2ss(
             except np.linalg.LinAlgError:
                 warnings.warn(
                     "Balanced realization failed (Gramians not positive definite). "
-                    "Using controllable canonical form.",
+                    "Using the unbalanced realization.",
                     UserWarning,
                     stacklevel=2,
                 )
@@ -530,7 +577,7 @@ def mimo_tf2ss(
             warnings.warn(
                 "System has marginally stable or unstable modes (e.g., integrators). "
                 "Balanced realization requires a Hurwitz A matrix; "
-                "using controllable canonical form.",
+                "using the unbalanced realization.",
                 UserWarning,
                 stacklevel=2,
             )

@@ -19,6 +19,14 @@ Minerals Engineering 20(11):1099-1108.
 - Fd: Dilution water flow (m³/h)
 - Vp: Pump speed (Hz)
 
+## State-space realization and estimation
+
+The transfer-function assembly initially creates four separate integrators for the four input paths entering the sump level, `Ls`. Only one combination affects the measured level, so the 54-state realization contains three unobservable modes at `z = 1`.
+
+`grinding_model()` enables `remove_unobservable_integrators=True` in `mimo_tf2ss`. Orthogonal state projections remove these redundant directions, giving 51 states while preserving the input/output response and the physical level integrator. Balancing is disabled because that remaining integrator is not asymptotically stable. Initial state estimates and covariances are defined using the returned realization.
+
+The augmented Kalman filter estimates output biases for `Sp`, `Dm`, and `Fc` (`dy_index=[0, 1, 2]`) with a `3 x 3` bias covariance. Input-bias estimation is disabled (`du_index=[]`). An additional output bias on `Ls` would be indistinguishable from its integrating state, so that channel is excluded. The resulting augmented model passes the detectability check without a plant-rank deficiency.
+
 ## Running
 
 ```bash

@@ -419,7 +419,7 @@ class NeuralMpc(Mpc[cs.MX]):
     n_outputs : int
         Number of measured outputs (1: h2 level).
     sequence_length : int
-        Total sequence length: horizon + n_context.
+        Number of predicted samples; context is processed outside the NLP.
     batch_size : int
         Batch size for neural network (1).
     pars_init : dict
@@ -447,7 +447,7 @@ class NeuralMpc(Mpc[cs.MX]):
     n_context = N_CONTEXT  # used for initial RNN state estimation
     n_inputs = 1
     n_outputs = 1
-    sequence_length = horizon + n_context
+    sequence_length = horizon
     batch_size = 1
 
     pars_init = {
@@ -513,13 +513,13 @@ class NeuralMpc(Mpc[cs.MX]):
         N = horizon
         gamma = self.discount_factor
 
-        nx, nu = NtiSystem.nx - 1, NtiSystem.nu
+        nx, nu = self.n_outputs, self.n_inputs
         a_bnd = NtiSystem.a_bnd
 
         nlp = Nlp(sym_type="MX")
         super().__init__(
             nlp,
-            N,
+            prediction_horizon=N,
             tuning_parameters=pars_init,
             n_context=n_context,
             shooting=shooting,
@@ -531,14 +531,14 @@ class NeuralMpc(Mpc[cs.MX]):
         self.horizon = horizon
         self.n_context = n_context
         self.hidden_size = hidden_size
-        self.sequence_length = horizon + n_context
+        self.sequence_length = horizon
         self.shooting = shooting
         self.model_name = model_name
 
-        x_lb = self.parameter("x_lb", (nx,))
-        x_ub = self.parameter("x_ub", (nx,))
-        x_lb_f = self.parameter("x_lb_f", (nx,))
-        x_ub_f = self.parameter("x_ub_f", (nx,))
+        x_lb = self.parameter("x_lb", (nx, 1))
+        x_ub = self.parameter("x_ub", (nx, 1))
+        x_lb_f = self.parameter("x_lb_f", (nx, 1))
+        x_ub_f = self.parameter("x_ub_f", (nx, 1))
 
         b = self.parameter("b")
         H_s = self.parameter("H_s", (nx, nx))
@@ -556,29 +556,22 @@ class NeuralMpc(Mpc[cs.MX]):
         w = self.parameter("w", (nx, 1))
         x_scaling = self.parameter("x_scaling", (nx, 1))
         self.parameter("u_scaling", (nu, 1))
-        SP = self.parameter("SP", (nx, 1))
+        SP = self.parameter("SP", (nx, 1))  # solve_mpc() expects this name.
 
-        x, x0 = self.state("x", nx, bound_initial=False)
-        u, u_exp, u0 = self.action("u", nu, lb=a_bnd[0], ub=a_bnd[1])
+        _, x0 = self.state("x", nx)
+        _, u_exp, _ = self.action("u", nu, lb=a_bnd[0], ub=a_bnd[1])
         s1, _, _ = self.variable("s1", (nx, N), lb=0)
         s2, _, _ = self.variable("s2", (nx, 1), lb=0)
 
         model = CasadiLSTM(
-            n_context,
-            self.n_inputs,
+            n_context=n_context,
+            n_inputs=nu,
             hidden_size=hidden_size,
             horizon=N,
-            proj_size=1,
+            proj_size=nx,
         )
 
-        model_filename = f"{model_name}.pt"
-        model_path = (
-            project_root
-            / "examples"
-            / "Cascaded_Two_Tank_System"
-            / "models"
-            / model_filename
-        )
+        model_path = current_dir / "models" / f"{model_name}.pt"
         assert model_path.exists(), f"Model file not found at '{model_path}'"
         model.load_state_dict(torch.load(str(model_path), map_location="cpu"))
 
@@ -588,52 +581,39 @@ class NeuralMpc(Mpc[cs.MX]):
             name="F_neural",
             n_warmup=n_warmup,
         )
-        if shooting == "single":
-            # Single shooting: state() returned None; the trajectory exists only
-            # after set_dynamics builds it by forward simulation. Re-bind x to it.
-            x = self.states["x"]
+        # Neural trajectories contain N predictions, with no context/anchor columns.
+        # Reading states after dynamics registration also supports single shooting.
+        Y = self.states["x"]
+        Y_scaled = Y * x_scaling
+        E = (Y - SP) * x_scaling
+        Z = cs.vertcat(E, u_exp)
 
-        xlb_rep = cs.repmat(x_lb, 1, N)
-        xub_rep = cs.repmat(x_ub, 1, N)
+        # Stage and terminal bounds, including hard outputs.
         hard_indices = [0]
         self.constraint("s1_hard", s1[hard_indices, :], "==", 0)
         self.constraint("s2_hard", s2[hard_indices, :], "==", 0)
-        self.constraint(
-            "x_lb",
-            xlb_rep * x_scaling - s1,
-            "<=",
-            x[:, :] * x_scaling,
-        )
-        self.constraint(
-            "x_ub",
-            x[:, :] * x_scaling,
-            "<=",
-            xub_rep * x_scaling + s1,
-        )
-        self.constraint("x_lb_f", x_lb_f * x_scaling - s2, "<=", x[:, -1] * x_scaling)
-        self.constraint("x_ub_f", x[:, -1] * x_scaling, "<=", x_ub_f * x_scaling + s2)
+        self.constraint("x_lb", cs.repmat(x_lb, 1, N) * x_scaling - s1, "<=", Y_scaled)
+        self.constraint("x_ub", Y_scaled, "<=", cs.repmat(x_ub, 1, N) * x_scaling + s1)
+        self.constraint("x_lb_f", x_lb_f * x_scaling - s2, "<=", Y_scaled[:, -1])
+        self.constraint("x_ub_f", Y_scaled[:, -1], "<=", x_ub_f * x_scaling + s2)
 
-        e_N = x[:, -1] - SP
-        e_N = e_N * x_scaling
-        S = (gamma**N) * (0.5 * cs.bilin(H_s, e_N) + h_s.T @ e_N + c_s + w.T @ s2)
-
-        e_0 = x0 - SP
-        e_0 = e_0 * x_scaling
-        V0 = 0.5 * cs.bilin(H_0, e_0) + h_0.T @ e_0 + c_0
-
-        Lt = 0.0
-
-        for k in range(0, N):
-            e_k = x[:, k] - SP
-            e_k = e_k * x_scaling
-            Lt += (gamma**k) * (
-                0.5 * cs.bilin(H_lt, cs.vertcat(e_k, u_exp[:, k]))
-                + h_lt.T @ cs.vertcat(e_k, u_exp[:, k])
+        # Joint tracking/input weights include configurable cross terms.
+        stage_cost = sum(
+            gamma**t
+            * (
+                0.5 * cs.bilin(H_lt, Z[:, t])
+                + h_lt.T @ Z[:, t]
                 + c_lt
+                + w.T @ s1[:, t]
             )
-            Lt += (gamma**k) * (w.T @ s1[:, k])
-
-        self.minimize(V0 + S + Lt)
+            for t in range(N)
+        )
+        terminal_cost = gamma**N * (
+            0.5 * cs.bilin(H_s, E[:, -1]) + h_s.T @ E[:, -1] + c_s + w.T @ s2
+        )
+        e0 = (x0 - SP) * x_scaling
+        initial_cost = 0.5 * cs.bilin(H_0, e0) + h_0.T @ e0 + c_0
+        self.minimize(stage_cost + terminal_cost + initial_cost)
 
         opts = {
             "print_time": False,

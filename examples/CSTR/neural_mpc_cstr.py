@@ -542,7 +542,7 @@ class NeuralMpc(Mpc[cs.MX]):
     n_outputs : int
         Number of system outputs/states (4: C_A, C_B, T_R, T_K).
     sequence_length : int
-        Total sequence length: horizon + n_context.
+        Number of predicted samples; context is processed outside the NLP.
     batch_size : int
         Batch size for neural network (1).
     pars_init : dict
@@ -553,8 +553,7 @@ class NeuralMpc(Mpc[cs.MX]):
     -----
     - All variables (states, inputs) are normalized to [0, 1] for numerical stability.
     - Soft constraints on state bounds are enforced via slack variables with penalty.
-    - Hard constraints are applied to specific state indices (C_B, T_K); C_A and
-      T_R are soft to stay feasible under measurement noise.
+    - Hard constraints are applied to C_A, C_B, and T_K; T_R has soft bounds.
     - Cost function includes tracking error, control effort, and terminal cost.
     - Uses IPOPT solver with custom tolerance settings for real-time feasibility.
 
@@ -571,7 +570,7 @@ class NeuralMpc(Mpc[cs.MX]):
     n_context = N_CONTEXT  # used for initial RNN state estimation
     n_inputs = 2
     n_outputs = 4
-    sequence_length = horizon + n_context
+    sequence_length = horizon
     batch_size = 1
 
     def _norm_val(val, key):
@@ -645,10 +644,9 @@ class NeuralMpc(Mpc[cs.MX]):
         - Quadratic stage and terminal costs
 
         The MPC uses multi-shooting with neural dynamics propagating the
-        horizon. The first column (first step) is fixed to the latest
-        measurement, and optimization occurs over the remaining horizon. The
-        LSTM hidden/cell states are warmed up numerically from an ``n_context``
-        window outside the NLP.
+        horizon. Every state column is a future prediction. The LSTM hidden/cell
+        states are warmed up numerically from an ``n_context`` window outside
+        the NLP.
 
         Parameters
         ----------
@@ -662,7 +660,7 @@ class NeuralMpc(Mpc[cs.MX]):
         -----
         - Loads pre-trained LSTM model from ``models/{model_name}.pt``
         - Slack variable weights prevent constraint violations
-        - Hard constraints enforced on C_B and T_K indices
+        - Hard constraints enforced on C_A, C_B, and T_K indices
         - Control effort penalized via delta_u in cost function
         """
         # cfg wins when supplied; otherwise fall back to the class attributes so
@@ -693,7 +691,7 @@ class NeuralMpc(Mpc[cs.MX]):
         nlp = Nlp(sym_type="MX")
         super().__init__(
             nlp,
-            N,
+            prediction_horizon=N,
             tuning_parameters=pars_init,
             n_context=n_context,
             shooting=shooting,
@@ -705,7 +703,7 @@ class NeuralMpc(Mpc[cs.MX]):
         self.horizon = horizon
         self.n_context = n_context
         self.hidden_size = hidden_size
-        self.sequence_length = horizon + n_context
+        self.sequence_length = horizon
         self.shooting = shooting
 
         x_lb = self.parameter("x_lb", (nx, 1))
@@ -715,32 +713,31 @@ class NeuralMpc(Mpc[cs.MX]):
         b = self.parameter("b", (nx, 1))
         Q = self.parameter("Q", (nx, nx))
         R = self.parameter("R", (nu, nu))
-        SP = self.parameter("SP", (nx, 1))
+        SP = self.parameter("SP", (nx, 1))  # solve_mpc() expects this name.
         w = self.parameter("w", (nx, 1))
         x_scaling = self.parameter("x_scaling", (nx, 1))
         u_scaling = self.parameter("u_scaling", (nu, 1))
 
-        x, _ = self.state("x", nx, bound_initial=False)
-        u, u_exp, u0 = self.action("u", nu, lb=a_bnd[0], ub=a_bnd[1])
+        self.state("x", nx)
+        _, u_exp, u0 = self.action("u", nu, lb=a_bnd[0], ub=a_bnd[1])
         s1, _, _ = self.variable("s1", (nx, N), lb=0)
         s2, _, _ = self.variable("s2", (nx, 1), lb=0)
 
-        du = []
-        du.append(u_exp[:, 0] - u0)
-        for t in range(1, N):
-            du.append((u_exp[:, t] - u_exp[:, t - 1]) * u_scaling)
-        du = cs.hcat(du)
-
-        model = CasadiLSTM(
-            n_context,
-            self.n_inputs,
-            hidden_size=hidden_size,
-            horizon=N,
-            proj_size=4,
+        # Apply u_scaling to increments after the first control move.
+        du = cs.horzcat(
+            u_exp[:, :1] - u0,
+            (u_exp[:, 1:] - u_exp[:, :-1]) * cs.repmat(u_scaling, 1, N - 1),
         )
 
-        model_filename = f"{model_name}.pt"
-        model_path = project_root / "examples" / "CSTR" / "models" / model_filename
+        model = CasadiLSTM(
+            n_context=n_context,
+            n_inputs=nu,
+            hidden_size=hidden_size,
+            horizon=N,
+            proj_size=nx,
+        )
+
+        model_path = current_dir / "models" / f"{model_name}.pt"
         assert model_path.exists(), f"Model file not found at '{model_path}'"
         model.load_state_dict(torch.load(str(model_path), map_location="cpu"))
 
@@ -750,44 +747,26 @@ class NeuralMpc(Mpc[cs.MX]):
             name="F_neural",
             n_warmup=n_warmup,
         )
-        if shooting == "single":
-            # Single shooting: state() returned None; the trajectory exists only
-            # after set_dynamics builds it by forward simulation. Re-bind x to it.
-            x = self.states["x"]
-        xlb_rep = cs.repmat(x_lb, 1, N)
-        xub_rep = cs.repmat(x_ub, 1, N)
+        # All N columns are predictions; numerical context stays outside the NLP.
+        Y = self.states["x"]
+        Y_scaled = Y * x_scaling
+        E = (Y - SP) * x_scaling
+
         hard_indices = [0, 1, 3]
         self.constraint("s1_hard", s1[hard_indices, :], "==", 0)
         self.constraint("s2_hard", s2[hard_indices, :], "==", 0)
-        self.constraint(
-            "x_lb",
-            xlb_rep * x_scaling - s1,
-            "<=",
-            x[:, :] * x_scaling,
+        self.constraint("x_lb", cs.repmat(x_lb, 1, N) * x_scaling - s1, "<=", Y_scaled)
+        self.constraint("x_ub", Y_scaled, "<=", cs.repmat(x_ub, 1, N) * x_scaling + s1)
+        self.constraint("x_lb_f", x_lb_f * x_scaling - s2, "<=", Y_scaled[:, -1])
+        self.constraint("x_ub_f", Y_scaled[:, -1], "<=", x_ub_f * x_scaling + s2)
+
+        Q_cost = sum(
+            gamma**t * (cs.bilin(Q, E[:, t]) + w.T @ s1[:, t])
+            for t in range(N)
         )
-        self.constraint(
-            "x_ub",
-            x[:, :] * x_scaling,
-            "<=",
-            xub_rep * x_scaling + s1,
-        )
-        self.constraint("x_lb_f", x_lb_f * x_scaling - s2, "<=", x[:, -1] * x_scaling)
-        self.constraint("x_ub_f", x[:, -1] * x_scaling, "<=", x_ub_f * x_scaling + s2)
-
-        e_N = x[:, -1] - SP
-        e_N = e_N * x_scaling
-        S = (gamma**N) * (cs.bilin(Q, e_N) + w.T @ s2)
-
-        Lt = 0.0
-
-        for k in range(0, N):
-            e_k = x[:, k] - SP
-            e_k = e_k * x_scaling
-            Lt += (gamma**k) * (cs.bilin(Q, e_k))
-            Lt += (gamma**k) * (cs.bilin(R, du[:, k]))
-            Lt += (gamma**k) * (w.T @ s1[:, k])
-
-        self.minimize(S + Lt)
+        R_cost = sum(gamma**t * cs.bilin(R, du[:, t]) for t in range(N))
+        Q_term = gamma**N * (cs.bilin(Q, E[:, -1]) + w.T @ s2)
+        self.minimize(Q_cost + R_cost + Q_term)
 
         opts = {
             "print_time": False,

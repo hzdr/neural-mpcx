@@ -654,11 +654,11 @@ class NMPC(Mpc[cs.MX]):
         nlp = Nlp(sym_type="MX")
         super().__init__(
             nlp,
-            N,
+            prediction_horizon=N,
             tuning_parameters=pars_init,
             n_context=self.n_context,
             shooting=shooting,
-            neural=False
+            neural=False,
         )
 
         self.horizon = horizon
@@ -668,53 +668,37 @@ class NMPC(Mpc[cs.MX]):
         x_ub = self.parameter("x_ub", (nx, 1))
         x_lb_f = self.parameter("x_lb_f", (nx, 1))
         x_ub_f = self.parameter("x_ub_f", (nx, 1))
-        b = self.parameter("b", (nx, 1))
+        self.parameter("b", (nx, 1))
         Q = self.parameter("Q", (nx, nx))
         R = self.parameter("R", (nu, nu))
-        SP = self.parameter("SP", (nx, 1))
+        SP = self.parameter("SP", (nx, 1))  # solve_mpc() expects this name.
         w = self.parameter("w", (nx, 1))
         x_scaling = self.parameter("x_scaling", (nx, 1))
         u_scaling = self.parameter("u_scaling", (nu, 1))
 
-        x, _ = self.state("x", nx, bound_initial=False)
-        u, u_exp, u0 = self.action("u", nu, lb=a_bnd[0], ub=a_bnd[1])
+        self.state("x", nx, bound_initial=False)
+        _, u_exp, u0 = self.action("u", nu, lb=a_bnd[0], ub=a_bnd[1])
         s1, _, _ = self.variable("s1", (nx, N), lb=0)
         s2, _, _ = self.variable("s2", (nx, 1), lb=0)
 
-        du = []
-        du.append(u_exp[:, 0] - u0[:, -1])
-        for t in range(1, N):
-            du.append((u_exp[:, t] - u_exp[:, t - 1]) * u_scaling)
-        du = cs.hcat(du)
+        # Apply u_scaling to increments after the first control move.
+        du = cs.horzcat(
+            u_exp[:, :1] - u0,
+            (u_exp[:, 1:] - u_exp[:, :-1]) * cs.repmat(u_scaling, 1, N - 1),
+        )
 
+        # Convert normalized MPC variables to physical units for the RK4 model.
         x_sym = cs.MX.sym("x_in", nx)
         u_sym = cs.MX.sym("u_in", nu)
-        CA_p = (
-            x_sym[0] * (Y_NORM_PARAMS["C_A"]["max"] - Y_NORM_PARAMS["C_A"]["min"])
-            + Y_NORM_PARAMS["C_A"]["min"]
+        x_min = cs.DM([Y_NORM_PARAMS[key]["min"] for key in STATE_KEYS])
+        x_range = cs.DM(
+            [Y_NORM_PARAMS[key]["max"] - Y_NORM_PARAMS[key]["min"] for key in STATE_KEYS]
         )
-        CB_p = (
-            x_sym[1] * (Y_NORM_PARAMS["C_B"]["max"] - Y_NORM_PARAMS["C_B"]["min"])
-            + Y_NORM_PARAMS["C_B"]["min"]
-        )
-        TR_p = (
-            x_sym[2] * (Y_NORM_PARAMS["T_R"]["max"] - Y_NORM_PARAMS["T_R"]["min"])
-            + Y_NORM_PARAMS["T_R"]["min"]
-        )
-        TK_p = (
-            x_sym[3] * (Y_NORM_PARAMS["T_K"]["max"] - Y_NORM_PARAMS["T_K"]["min"])
-            + Y_NORM_PARAMS["T_K"]["min"]
-        )
-        x_phys = cs.vertcat(CA_p, CB_p, TR_p, TK_p)
-
-        F_p = (
-            u_sym[0] * (U_NORM_PARAMS["F"]["max"] - U_NORM_PARAMS["F"]["min"])
-            + U_NORM_PARAMS["F"]["min"]
-        )
-        Q_p = (
-            u_sym[1] * (U_NORM_PARAMS["Q_dot"]["max"] - U_NORM_PARAMS["Q_dot"]["min"])
-            + U_NORM_PARAMS["Q_dot"]["min"]
-        )
+        u_bounds = [U_NORM_PARAMS[key] for key in ("F", "Q_dot")]
+        u_min = cs.DM([bounds["min"] for bounds in u_bounds])
+        u_range = cs.DM([bounds["max"] - bounds["min"] for bounds in u_bounds])
+        x_phys = x_sym * x_range + x_min
+        u_phys = u_sym * u_range + u_min
 
         dt_hr = 0.005
         alpha, beta = 1.0, 1.0
@@ -743,71 +727,41 @@ class NMPC(Mpc[cs.MX]):
             dTK = (q_in + Kw * AR * (tr - tk)) / (mk * Cpk)
             return cs.vertcat(dCA, dCB, dTR, dTK)
 
-        k1 = get_derivatives(x_phys, F_p, Q_p)
-        k2 = get_derivatives(x_phys + 0.5 * dt_hr * k1, F_p, Q_p)
-        k3 = get_derivatives(x_phys + 0.5 * dt_hr * k2, F_p, Q_p)
-        k4 = get_derivatives(x_phys + dt_hr * k3, F_p, Q_p)
+        k1 = get_derivatives(x_phys, u_phys[0], u_phys[1])
+        k2 = get_derivatives(x_phys + 0.5 * dt_hr * k1, u_phys[0], u_phys[1])
+        k3 = get_derivatives(x_phys + 0.5 * dt_hr * k2, u_phys[0], u_phys[1])
+        k4 = get_derivatives(x_phys + dt_hr * k3, u_phys[0], u_phys[1])
 
         x_phys_next = x_phys + (dt_hr / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
 
-        CA_n_next = (x_phys_next[0] - Y_NORM_PARAMS["C_A"]["min"]) / (
-            Y_NORM_PARAMS["C_A"]["max"] - Y_NORM_PARAMS["C_A"]["min"]
-        )
-        CB_n_next = (x_phys_next[1] - Y_NORM_PARAMS["C_B"]["min"]) / (
-            Y_NORM_PARAMS["C_B"]["max"] - Y_NORM_PARAMS["C_B"]["min"]
-        )
-        TR_n_next = (x_phys_next[2] - Y_NORM_PARAMS["T_R"]["min"]) / (
-            Y_NORM_PARAMS["T_R"]["max"] - Y_NORM_PARAMS["T_R"]["min"]
-        )
-        TK_n_next = (x_phys_next[3] - Y_NORM_PARAMS["T_K"]["min"]) / (
-            Y_NORM_PARAMS["T_K"]["max"] - Y_NORM_PARAMS["T_K"]["min"]
-        )
-
-        x_next_norm = cs.vertcat(CA_n_next, CB_n_next, TR_n_next, TK_n_next)
-
+        x_next_norm = (x_phys_next - x_min) / x_range
         F_casadi = cs.Function("F_model", [x_sym, u_sym], [x_next_norm])
+        self.set_dynamics(F_casadi)
 
-        self.set_dynamics(F=F_casadi, n_in=nu, n_out=nx)
+        # Future predictions exclude the current-state anchor in either shooting mode.
+        X = self.states["x"]
+        Y = X[:, 1:]
+        # Stage terms cover the current state through prediction N - 1.
+        Y_stage = X[:, :-1]
+        Y_scaled = Y_stage * x_scaling
+        E = (Y_stage - SP) * x_scaling
+        e_terminal = (Y[:, -1] - SP) * x_scaling
 
-        if shooting == "single":
-            # Single shooting: state() returned None; the trajectory exists only
-            # after set_dynamics builds it by forward simulation. Re-bind x to it.
-            x = self.states["x"]
-
-        xlb_rep = cs.repmat(x_lb, 1, N)
-        xub_rep = cs.repmat(x_ub, 1, N)
         hard_indices = [0, 1, 3]
         self.constraint("s1_hard", s1[hard_indices, :], "==", 0)
         self.constraint("s2_hard", s2[hard_indices, :], "==", 0)
-        self.constraint(
-            "x_lb",
-            xlb_rep * x_scaling - s1,
-            "<=",
-            x[:, 0 : -1] * x_scaling,
+        self.constraint("x_lb", cs.repmat(x_lb, 1, N) * x_scaling - s1, "<=", Y_scaled)
+        self.constraint("x_ub", Y_scaled, "<=", cs.repmat(x_ub, 1, N) * x_scaling + s1)
+        self.constraint("x_lb_f", x_lb_f * x_scaling - s2, "<=", Y[:, -1] * x_scaling)
+        self.constraint("x_ub_f", Y[:, -1] * x_scaling, "<=", x_ub_f * x_scaling + s2)
+
+        Q_cost = sum(
+            gamma**t * (cs.bilin(Q, E[:, t]) + w.T @ s1[:, t])
+            for t in range(N)
         )
-        self.constraint(
-            "x_ub",
-            x[:, 0 : -1] * x_scaling,
-            "<=",
-            xub_rep * x_scaling + s1,
-        )
-        self.constraint("x_lb_f", x_lb_f * x_scaling - s2, "<=", x[:, -1] * x_scaling)
-        self.constraint("x_ub_f", x[:, -1] * x_scaling, "<=", x_ub_f * x_scaling + s2)
-
-        e_N = x[:, -1] - SP
-        e_N = e_N * x_scaling
-        S = (gamma**N) * (cs.bilin(Q, e_N) + w.T @ s2)
-
-        Lt = 0.0
-
-        for k in range(self.n_context - 1, self.n_context - 1 + N):
-            e_k = x[:, k] - SP
-            e_k = e_k * x_scaling
-            Lt += (gamma**k) * (cs.bilin(Q, e_k))
-            Lt += (gamma**k) * (cs.bilin(R, du[:, k]))
-            Lt += (gamma**k) * (w.T @ s1[:, k])
-
-        self.minimize(S + Lt)
+        R_cost = sum(gamma**t * cs.bilin(R, du[:, t]) for t in range(N))
+        Q_term = gamma**N * (cs.bilin(Q, e_terminal) + w.T @ s2)
+        self.minimize(Q_cost + R_cost + Q_term)
 
         opts = {
             "print_time": False,
