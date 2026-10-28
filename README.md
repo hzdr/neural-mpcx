@@ -720,7 +720,7 @@ Cite this software in academic publications:
   author = {Lopes J{\'u}nior, {\^E}nio and Reinecke, Sebastian Felix},
   year   = {2026},
   url    = {https://github.com/hzdr/neural-mpcx},
-  doi    = {10.14278/rodare.5008}
+  doi    = {10.14278/rodare.5114}
 }
 ```
 
