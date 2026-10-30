@@ -58,16 +58,26 @@ from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.ticker import AutoMinorLocator
 
 
-#: The analysis notebooks' style cell.
+FONT_SIZE = 14
+TITLE_SIZE = 18
+LABEL_SIZE = 16
+TICK_SIZE = 14
+LEGEND_SIZE = 14
+ANNOTATION_SIZE = 12
+FIGURE_TITLE_SIZE = 20
+CAPTION_FONTSIZE = 12
+
 RCPARAMS = {
     "font.family": "serif",
     "font.serif": ["Times New Roman", "DejaVu Serif", "serif"],
-    "font.size": 10,
-    "axes.titlesize": 11,
-    "axes.labelsize": 10,
-    "xtick.labelsize": 9,
-    "ytick.labelsize": 9,
-    "legend.fontsize": 9,
+    "font.size": FONT_SIZE,
+    "axes.titlesize": TITLE_SIZE,
+    "axes.labelsize": LABEL_SIZE,
+    "xtick.labelsize": TICK_SIZE,
+    "ytick.labelsize": TICK_SIZE,
+    "legend.fontsize": LEGEND_SIZE,
+    "legend.title_fontsize": LEGEND_SIZE,
+    "figure.titlesize": FIGURE_TITLE_SIZE,
     "figure.dpi": 150,
     "savefig.dpi": 300,
     "savefig.bbox": "tight",
@@ -179,7 +189,7 @@ def finish(ax, minor: bool = True, legend: bool = True, **legend_kw) -> None:
         if ax.get_yscale() == "linear":
             ax.yaxis.set_minor_locator(AutoMinorLocator())
     if legend and ax.get_legend_handles_labels()[0]:
-        ax.legend(**{"loc": "best", "fontsize": 8, **legend_kw})
+        ax.legend(**{"loc": "best", "fontsize": LEGEND_SIZE, **legend_kw})
 
 
 def log2_axis(ax, values: Sequence[int], which: str = "x") -> None:
@@ -222,7 +232,7 @@ def panel_label(ax, letter: str) -> None:
     The box sits over the data, so it carries an opaque background: a fan puts
     a hundred traces under this corner.
     """
-    ax.text(0.015, 0.975, f"({letter})", transform=ax.transAxes, fontsize=10,
+    ax.text(0.015, 0.975, f"({letter})", transform=ax.transAxes, fontsize=LABEL_SIZE,
             fontweight="bold", va="top", ha="left", zorder=10,
             bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.75,
                   "pad": 1.6})
@@ -272,7 +282,6 @@ def annotate_failures(ax, x, y, mask: Iterable[bool], label: str = "failed") -> 
 
 #: Average glyph advance of the caption face, in inches per character at
 #: :data:`CAPTION_FONTSIZE`. Used to wrap a caption to the figure's own width.
-CAPTION_FONTSIZE = 7
 _CAPTION_CHAR_IN = 0.48 * CAPTION_FONTSIZE / 72.0
 
 
@@ -302,4 +311,6 @@ __all__ = [
     "SEQUENTIAL", "DIVERGING", "ORDINAL_CMAP", "ORDINAL_TRACE_RANGE",
     "COLOR_PLANT", "COLOR_PRED", "COLOR_SP",
     "COLOR_EST", "COLOR_MEAS", "COLOR_THRESHOLD", "COLOR_FAIL",
+    "FONT_SIZE", "TITLE_SIZE", "LABEL_SIZE", "TICK_SIZE", "LEGEND_SIZE",
+    "ANNOTATION_SIZE", "FIGURE_TITLE_SIZE",
 ]

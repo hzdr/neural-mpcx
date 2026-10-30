@@ -158,9 +158,9 @@ def _fan(frame, bench, ts, outdir) -> List[Path]:
         plt.close(fig)
         return []
 
-    ax.set_title(f"{bench.label}: closed loop under measurement noise",
-                 fontsize=10)
-    ax.legend(loc="best", fontsize=7.5)
+    ax.set_title(f"{bench.label}:\nclosed loop under measurement noise",
+                 fontsize=ps.TITLE_SIZE)
+    ax.legend(loc="best", fontsize=ps.LEGEND_SIZE)
     bar = fig.colorbar(info["mappable"], ax=[ax, ax_u],
                        label=info["cbar_label"], fraction=0.04, pad=0.02)
     bar.set_ticks(info["cbar_ticks"], labels=info["cbar_ticklabels"])
@@ -233,7 +233,7 @@ def _offset_dots(frame, bench, outdir) -> List[Path]:
         ps.annotate_failures(ax_iae, [edge] * len(dropped_rows), dropped_rows,
                              [True] * len(dropped_rows), label="non-finite IAE")
         ax_iae.set_xlim(right=edge)
-        ax_iae.legend(loc="best", fontsize=7.5)
+        ax_iae.legend(loc="best", fontsize=ps.LEGEND_SIZE)
     ax_iae.set_xlabel(r"IAE$_{\mathrm{norm}}$ [–]")
 
     ax_off.set_yticks(range(len(sigmas)), [f"{s:g}" for s in sigmas])
@@ -243,7 +243,7 @@ def _offset_dots(frame, bench, outdir) -> List[Path]:
         ps.finish(ax, minor=False, legend=False)
 
     fig.suptitle(f"{bench.label}: offset and tracking cost per noise level",
-                 fontsize=10)
+                 fontsize=ps.FIGURE_TITLE_SIZE)
     undrawn = []
     if n_no_offset:
         undrawn.append(f"{n_no_offset} run(s) left no finite offset")

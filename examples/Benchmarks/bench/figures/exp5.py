@@ -120,19 +120,19 @@ def _performance(frame, bench, outdir, root) -> List[Path]:
                    linewidth=0.8, alpha=0.6)
         ax.axhline(bench.x_upper[s_i], color="grey", linestyle="--",
                    linewidth=0.8, alpha=0.6)
-        ax.set_title(bench.state_labels[s_i], fontsize=9)
+        ax.set_title(bench.state_labels[s_i], fontsize=ps.TITLE_SIZE)
         ax.set_ylabel(f"{bench.state_labels[s_i]} [{bench.state_units[s_i]}]")
-        ps.finish(ax, legend=True, loc="best", fontsize=7, framealpha=0.9)
+        ps.finish(ax, legend=True, loc="best", fontsize=ps.LEGEND_SIZE, framealpha=0.9)
 
     # Inputs occupy the bottom row.
     for k, akey in enumerate(bench.action_keys):
         ax = axes[nrows - 1][k if ncols > 1 else 0]
         ax.step(t, ts[akey], where="post", color=ps.COLOR_PRED,
                 label=bench.action_labels[k])
-        ax.set_title(f"{bench.action_labels[k]} (input)", fontsize=9)
+        ax.set_title(f"{bench.action_labels[k]} (input)", fontsize=ps.TITLE_SIZE)
         ax.set_ylabel(f"{bench.action_labels[k]} [{bench.action_units[k]}]")
         ax.set_xlabel("time [s]")
-        ps.finish(ax, legend=True, loc="best", fontsize=7, framealpha=0.9)
+        ps.finish(ax, legend=True, loc="best", fontsize=ps.LEGEND_SIZE, framealpha=0.9)
 
     # Switch off any leftover panel so it does not render as an empty frame.
     used = {(r, c) for r, c, _ in panels}
@@ -147,7 +147,7 @@ def _performance(frame, bench, outdir, root) -> List[Path]:
         axes[nrows - 1][c].set_xlabel("time [s]")
 
     fig.suptitle(f"{bench.label}: nominal closed-loop performance",
-                 fontsize=11, fontweight="bold")
+                 fontsize=ps.FIGURE_TITLE_SIZE, fontweight="bold")
     ps.caption(
         fig,
         f"Absolute IAE = {row['iae_tracked']:.4g} "
@@ -160,7 +160,6 @@ def _performance(frame, bench, outdir, root) -> List[Path]:
         f"Failed solves: {int(row['n_failed_solves'])}.",
     )
     fig.tight_layout()
-    fig.subplots_adjust(top=0.93)
     return ps.save(fig, f"exp5_closed_loop_{bench.key}", outdir)
 
 

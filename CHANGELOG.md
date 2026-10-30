@@ -5,6 +5,18 @@ All notable changes to NeuralMPCX will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [3.1.6] - 2026-10-30
+
+### Added
+
+- Added (`examples/Benchmarks/plot_initialization_error.py`). This standalone script loads the trained LSTMs and CSV datasets, samples random windows, and writes `figures/context_vs_zero_prediction.pdf` and `.svg`. Each window supplies its own measured context; the paired zero-state forecast uses the same subsequent inputs. Available outputs are `cstr:C_A`, `cstr:C_B`, `cstr:T_R`, `cstr:T_K`, and `cts:H_2`. The default panels are CSTR C_B, CSTR T_K, and two-tank h_2. Context lengths, scaling and model names follow the training modules: CSTR uses 10 context samples and a 40-sample window; two-tank uses 5 and 35. The figure uses the shared `bench/plotstyle.py` publication style and plots mean absolute error with shaded mean ± one standard deviation at each forecast step, clipped at zero below, as in the notebooks. Arrays for **all** model outputs are regenerated and saved to `results/initialization_error/{cstr,cts}.npz`, together with sampled window starts, output names/units, context length, window size, seed and checkpoint. `generate_errors()` and `plot_errors()` can also be called separately to redraw saved data without running inference. Use `--data-dir` and `--output-dir` to change destinations. Requires the project's PyTorch extra (`pip install -e ".[torch]"`).
+
+
+### Changed
+
+- Changed Figure sizes on (`examples\Benchmarks\figures`): Tick numbers and legends: 14 pt, Axis labels: 16 pt, Panel titles: 18pt and Figure titles: 20pt.  
+
+
 ## [3.1.5] - 2026-10-28
 
 ### Added

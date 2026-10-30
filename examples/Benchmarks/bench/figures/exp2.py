@@ -154,9 +154,9 @@ def _fan(frame, bench, outdir, root) -> List[Path]:
         plt.close(fig)
         return []
 
-    ax.set_title(f"{bench.label}: {len(lhs)} initial conditions, "
-                 f"±{info['box_percent']:.0f} % around nominal", fontsize=10)
-    ax.legend(loc="best", fontsize=8)
+    ax.set_title(f"{bench.label}: {len(lhs)} initial conditions\n"
+                 f"±{info['box_percent']:.0f} % around nominal", fontsize=ps.TITLE_SIZE)
+    ax.legend(loc="best", fontsize=ps.LEGEND_SIZE)
     fig.colorbar(info["mappable"], ax=[ax, ax_u], label=info["cbar_label"],
                  fraction=0.04, pad=0.02)
 

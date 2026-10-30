@@ -51,7 +51,7 @@ def _rtf(frame, bench, outdir) -> List[Path]:
     if not horizons or not sizes:
         return []
 
-    fig, ax = plt.subplots(figsize=(4.5, 3.5))
+    fig, ax = plt.subplots(figsize=(4.5, 5.0))
     ax.axhline(y=1, color=ps.COLOR_THRESHOLD, linestyle="--", linewidth=1.5,
                label="Threshold", zorder=1)
 
@@ -71,8 +71,9 @@ def _rtf(frame, bench, outdir) -> List[Path]:
     ax.set_ylabel(r"RTF$_{\mathrm{WCET}}$ [–]")
     ps.log2_axis(ax, horizons)
     ax.set_yscale("log")
-    ax.legend(loc="upper left", ncol=2, title="Hidden size", fontsize=8,
-              title_fontsize=8)
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.02), ncol=2,
+              title="Hidden size", fontsize=ps.LEGEND_SIZE,
+              title_fontsize=ps.LEGEND_SIZE)
     ax.grid(True, which="major", alpha=0.3)
     ax.grid(True, which="minor", alpha=0.15)
     ps.caption(

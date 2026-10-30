@@ -73,8 +73,8 @@ def _attach_colorbar(fig, info, ax, ax_u) -> None:
                        fraction=0.05, pad=0.02)
     if "cbar_ticks" in info:
         bar.set_ticks(info["cbar_ticks"], labels=info["cbar_ticklabels"])
-    bar.ax.tick_params(labelsize=8)
-    bar.set_label(info["cbar_label"], fontsize=9)
+    bar.ax.tick_params(labelsize=ps.TICK_SIZE)
+    bar.set_label(info["cbar_label"], fontsize=ps.LABEL_SIZE)
 
 
 #: Where the shared key and the caption sit, in figure fractions below the axes.
@@ -102,7 +102,7 @@ def _shared_legend(fig, axes) -> None:
     if handles:
         fig.legend(handles, labels, loc="lower center",
                    bbox_to_anchor=(0.5, LEGEND_Y), ncol=len(handles),
-                   fontsize=9, frameon=False)
+                   fontsize=ps.LEGEND_SIZE, frameon=False)
 
 
 def _fan_grid(metrics, bench, outdir, root) -> List[Path]:
@@ -142,7 +142,7 @@ def _fan_grid(metrics, bench, outdir, root) -> List[Path]:
         if info is None:
             plt.close(fig)
             return []
-        ax.set_title(FAN_TITLES[i], fontsize=10)
+        ax.set_title(FAN_TITLES[i], fontsize=ps.TITLE_SIZE)
         ps.panel_label(ax, LETTERS[i])
         _attach_colorbar(fig, info, ax, ax_u)
         infos.append(info)
@@ -152,11 +152,11 @@ def _fan_grid(metrics, bench, outdir, root) -> List[Path]:
     # artists in the order they are added, and a legend added first lands under
     # the title instead of below it.
     fig.suptitle(f"{bench.label}: closed loop across the four experiments",
-                 fontsize=12, fontweight="bold")
+                 fontsize=ps.FIGURE_TITLE_SIZE, fontweight="bold")
     # The three fans share one key. Panel (d) is a single run with two traces of
     # its own, so it keeps a small box rather than adding them to the shared one.
     _shared_legend(fig, state_axes[:3])
-    state_axes[3].legend(loc="lower right", fontsize=8)
+    state_axes[3].legend(loc="lower right", fontsize=ps.LEGEND_SIZE)
 
     counts = ", ".join(
         f"({LETTERS[i]}) {info['n_completed']} of {info['n_total']}"
@@ -201,13 +201,13 @@ def _envelope_grid(metrics, outdir) -> List[Path]:
             if info is None:
                 plt.close(fig)
                 return []
-            ax.set_title(info["title"], fontsize=10)
+            ax.set_title(info["title"], fontsize=ps.TITLE_SIZE)
             ps.panel_label(ax, LETTERS[2 * r + c])
             infos.append(info)
 
-    axes[0][0].legend(loc="lower left", fontsize=7.5)
+    axes[0][0].legend(loc="lower left", fontsize=ps.LEGEND_SIZE)
     fig.suptitle("Mismatch envelope over the plant parameters",
-                 fontsize=12, fontweight="bold")
+                 fontsize=ps.FIGURE_TITLE_SIZE, fontweight="bold")
 
     # Both columns share a method and both rows share a sample, so the caption
     # states each once and then only what separates the rows.

@@ -167,8 +167,8 @@ def _fan(frame, bench, outdir, root) -> List[Path]:
         plt.close(fig)
         return []
 
-    ax.set_title(f"{bench.label}: {len(lhs)} mismatched plants", fontsize=10)
-    ax.legend(loc="best", fontsize=8)
+    ax.set_title(f"{bench.label}: {len(lhs)} mismatched plants", fontsize=ps.TITLE_SIZE)
+    ax.legend(loc="best", fontsize=ps.LEGEND_SIZE)
     fig.colorbar(info["mappable"], ax=[ax, ax_u], label=info["cbar_label"],
                  fraction=0.04, pad=0.02)
 
@@ -218,7 +218,7 @@ def _disturbance(frame, bench, outdir, root) -> List[Path]:
                                 "lw": 1.2},
                 )
                 ax.text(t_end * 0.965, (sp_end + y_end) / 2,
-                        f"offset {y_end - sp_end:+.3g}", fontsize=7.5,
+                        f"offset {y_end - sp_end:+.3g}", fontsize=ps.ANNOTATION_SIZE,
                         color=ps.COLOR_EST, ha="right", va="center")
 
         run0 = ts[ts.run_id == group.iloc[0]["run_id"]].sort_values("step")
@@ -231,8 +231,8 @@ def _disturbance(frame, bench, outdir, root) -> List[Path]:
                       linewidth=1.2, zorder=1)
         ax.set_ylabel(f"{bench.state_labels[bench.track_index]} "
                       f"[{bench.state_units[bench.track_index]}]")
-        ax.set_title(f"{bench.label}: unmeasured step in "
-                     f"{DIST_LABELS.get(kind, kind)}", fontsize=10)
+        ax.set_title(f"{bench.label}: unmeasured step in\n"
+                     f"{DIST_LABELS.get(kind, kind)}", fontsize=ps.TITLE_SIZE)
         ps.finish(ax, legend=True)
         ax_u.set_ylabel(f"{bench.action_labels[0]} [{bench.action_units[0]}]")
         ax_u.set_xlabel("time [s]")
@@ -269,10 +269,11 @@ def _offset_dots(frame, bench, outdir) -> List[Path]:
                          ~cases.iloc[order]["completed"].to_numpy())
     ax.axvline(0.0, color=ps.COLOR_THRESHOLD, linewidth=1.4, zorder=2)
     ax.set_yticks(y[:: max(1, len(y) // 20)], labels[:: max(1, len(y) // 20)],
-                  fontsize=6.5)
+                  fontsize=ps.TICK_SIZE)
     ax.set_xlabel(f"steady-state offset [{bench.state_units[bench.track_index]}]")
-    ax.set_ylabel(f"{params[0]} / {params[1]}", fontsize=8)
-    ax.set_title(f"{bench.label}: residual offset under mismatch", fontsize=10)
+    ax.set_ylabel(f"{params[0]} / {params[1]}", fontsize=ps.LABEL_SIZE)
+    ax.set_title(f"{bench.label}:\nresidual offset under mismatch",
+                 fontsize=ps.TITLE_SIZE)
     ps.finish(ax, legend=False)
     ps.caption(fig, "Above zero the controller settles above the setpoint, "
                     "below zero under it. One row per sampled mismatch case, "
@@ -331,12 +332,12 @@ def draw_envelope(ax, frame, bench, metric: str, **cbar_kw) -> dict | None:
     if metric == "iae":
         values = grid["iae_norm"].to_numpy(float)
         label = r"IAE$_{\mathrm{norm}}$ [–]"
-        title = f"{bench.label}: mismatch envelope"
+        title = f"{bench.label}:\nmismatch envelope"
     elif metric == "offset":
         values = grid["ss_offset"].to_numpy(float)
         label = (f"steady-state offset "
                  f"[{bench.state_units[bench.track_index]}]")
-        title = f"{bench.label}: residual offset under mismatch"
+        title = f"{bench.label}:\nresidual offset under mismatch"
     else:
         raise ValueError(f"unknown metric {metric!r}")
 
@@ -357,7 +358,7 @@ def draw_envelope(ax, frame, bench, metric: str, **cbar_kw) -> dict | None:
             if float(np.min(z)) <= 2.0 <= float(np.max(z)):
                 cs = ax.tricontour(x, y, z, levels=[2.0], colors="white",
                                    linewidths=1.6)
-                ax.clabel(cs, fmt={2.0: "2x nominal"}, fontsize=7)
+                ax.clabel(cs, fmt={2.0: "2x nominal"}, fontsize=ps.ANNOTATION_SIZE)
         else:
             # Symmetric about zero at the 98th percentile, so one diverged plant
             # cannot flatten the rest of the map to white.
@@ -422,8 +423,8 @@ def _envelope_map(frame, bench, outdir, metric: str) -> List[Path]:
         plt.close(fig)
         return []
 
-    ax.set_title(info["title"], fontsize=10)
-    ax.legend(loc="best", fontsize=7.5)
+    ax.set_title(info["title"], fontsize=ps.TITLE_SIZE)
+    ax.legend(loc="best", fontsize=ps.LEGEND_SIZE)
     ps.caption(fig, _envelope_caption_text(info))
     fig.tight_layout()
     return ps.save(fig, f"exp3_envelope_{metric}_{bench.key}", outdir)
@@ -448,12 +449,12 @@ def _neural_vs_nmpc(frame, bench, outdir) -> List[Path]:
                edgecolor="black", linewidth=0.5, zorder=3, label="physics NMPC")
     ax.scatter(pivot["neural"], y, s=34, color=ps.CATEGORICAL[2], marker="o",
                edgecolor="black", linewidth=0.5, zorder=3, label="neural MPC")
-    ax.set_yticks(y, [f"{a:g} / {b:g}" for a, b in pivot.index], fontsize=7)
-    ax.set_ylabel(f"{p0} / {p1}", fontsize=8)
+    ax.set_yticks(y, [f"{a:g} / {b:g}" for a, b in pivot.index], fontsize=ps.TICK_SIZE)
+    ax.set_ylabel(f"{p0} / {p1}", fontsize=ps.LABEL_SIZE)
     ax.set_xlabel(r"IAE$_{\mathrm{norm}}$ [–]")
-    ax.set_title(f"{bench.label}: degradation under identical mismatch",
-                 fontsize=10)
-    ax.legend(loc="best", fontsize=7.5)
+    ax.set_title(f"{bench.label}:\ndegradation under identical mismatch",
+                 fontsize=ps.TITLE_SIZE)
+    ax.legend(loc="best", fontsize=ps.LEGEND_SIZE)
     ps.finish(ax, legend=False)
     worse = int((pivot["neural"] > pivot["nmpc"]).sum())
     ps.caption(
